@@ -22,6 +22,8 @@ export default function Home() {
   const [status, setStatus] = useState("Not loaded");
   const [progress, setProgress] = useState(0);
   const [selectedModel, setSelectedModel] = useState(MODELS[0].path);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isSearchMode, setIsSearchMode] = useState(false);
 
   const worker = useRef<Worker | null>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
@@ -86,13 +88,79 @@ export default function Home() {
       worker.current?.removeEventListener("message", onMessageReceived);
   }, [selectedModel]);
 
-  const sendMessage = () => {
-    if (worker.current && input.trim()) {
+  const sendMessage = async () => {
+    if (!input.trim()) return;
+
+    const newMessages = [...messages, { role: "user", content: input }];
+    setMessages(newMessages);
+    setInput("");
+
+    const isExplicitSearch = input.startsWith("/search ");
+    const isImplicitSearch = isSearchMode && !isExplicitSearch;
+
+    if (isExplicitSearch || isImplicitSearch) {
+      setIsSearching(true);
+      setStatus("Searching...");
+      const query = isExplicitSearch
+        ? input.substring("/search ".length).trim()
+        : input.trim();
+
+      try {
+        const response = await fetch("/api/search", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ query }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const { searchResults, pageContent, firstResultLink } = await response.json();
+
+        const formattedResults = searchResults
+          .map(
+            (result: any, index: number) =>
+              `Result ${index + 1}:\nTitle: ${result.title}\nLink: ${
+                result.link
+              }\nSnippet: ${result.snippet}`
+          )
+          .join("\n\n");
+
+        let llmPrompt = `Based on the following search results, please answer the question "${query}" concisely and summarize the key information:\n\n${formattedResults}`;
+
+        if (pageContent) {
+          llmPrompt += `\n\nAdditionally, here is the content from the first linked page (${firstResultLink}):\n\n${pageContent}`;
+        }
+
+        llmPrompt += `\n\nAnswer:`;
+
+        // Send the combined prompt to the LLM worker
+        if (worker.current) {
+          setStatus("Generating answer from search results...");
+          worker.current.postMessage({
+            messages: [...newMessages, { role: "user", content: llmPrompt }],
+            model: selectedModel,
+          });
+        }
+      } catch (error) {
+        console.error("Search failed:", error);
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: "Sorry, I couldn't perform the search."
+          },
+        ]);
+      } finally {
+        setIsSearching(false);
+        // Status will be set to "Ready" by the worker after LLM response
+      }
+    } else if (worker.current) {
       setStatus("Generating...");
-      const newMessages = [...messages, { role: "user", content: input }];
-      setMessages(newMessages);
       worker.current.postMessage({ messages: newMessages, model: selectedModel });
-      setInput("");
     }
   };
 
@@ -231,20 +299,47 @@ export default function Home() {
       </main>
 
       <footer className="p-4 border-t dark:border-zinc-800">
-        <div className="flex items-center">
+        <div className="flex items-center rounded-md overflow-hidden">
           <input
             type="text"
-            className="flex-1 p-2 border rounded-l-md bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white"
-            placeholder="Type your message..."
+            className="flex-1 p-2 border-none bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white focus:outline-none"
+            placeholder={
+              isSearchMode ? "Type your search query..." : "Type your message..."
+            }
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyPress={(e) => e.key === "Enter" && sendMessage()}
-            disabled={status !== "Ready"}
+            disabled={status !== "Ready" || isSearching}
           />
           <button
-            className="h-10 px-5 flex items-center justify-center rounded-r-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 disabled:bg-gray-400"
-            onClick={sendMessage}
+            className={`h-10 px-5 flex items-center justify-center ${
+              isSearchMode ? "bg-green-600" : "bg-gray-400"
+            } text-white font-medium transition-colors ${
+              isSearchMode ? "hover:bg-green-700" : "hover:bg-gray-500"
+            }`}
+            onClick={() => setIsSearchMode(!isSearchMode)}
             disabled={status !== "Ready"}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <span className="hidden sm:inline">Search</span>
+          </button>
+          <button
+            className="h-10 px-5 flex items-center justify-center bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 disabled:bg-gray-400"
+            onClick={sendMessage}
+            disabled={status !== "Ready" || isSearching}
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
