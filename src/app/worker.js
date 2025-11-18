@@ -31,10 +31,10 @@ self.addEventListener("message", async (event) => {
     self.postMessage({ status: "progress", progress });
   });
 
-  if (messages) {
-    const prompt = messages
-      .map((msg) => `${msg.role}: ${msg.content}`)
-      .join("\n");
+  if (messages && messages.length > 0) {
+    const prompt =
+      messages.map((msg) => `${msg.role}: ${msg.content}`).join("\n") +
+      "\nassistant:";
 
     const stream = await generator(prompt, {
       max_new_tokens: 200,
@@ -46,7 +46,11 @@ self.addEventListener("message", async (event) => {
     });
 
     for await (const chunk of stream) {
-      self.postMessage({ status: "update", output: chunk.generated_text });
+      const token = chunk.generated_text;
+      if (token.trim().toLowerCase() === "user:") {
+        break;
+      }
+      self.postMessage({ status: "update", output: token });
     }
     self.postMessage({ status: "complete" });
   } else {

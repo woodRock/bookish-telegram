@@ -2,21 +2,23 @@
 
 import { useState, useEffect, useRef } from "react";
 
-const MODELS = [
-  { name: "LaMini-T5-61M", path: "Xenova/LaMini-T5-61M" }
+const MODELS = [    
+  { name: "Flan-T5-Small", path: "Xenova/flan-t5-small" },
+  { name: "Flan-T5-Base", path: "Xenova/flan-t5-base" },
+  { name: "LaMini-T5-61M", path: "Xenova/LaMini-T5-61M" },
 ];
+
+const INITIAL_MESSAGE = {
+  role: "assistant",
+  content:
+    "Hello! I'm a local AI assistant. You can choose a model from the dropdown and start chatting.",
+};
 
 export default function Home() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<
     { role: string; content: string }[]
-  >([
-    {
-      role: "assistant",
-      content:
-        "Hello! I'm a local AI assistant. You can choose a model from the dropdown and start chatting.",
-    },
-  ]);
+  >([]);
   const [status, setStatus] = useState("Not loaded");
   const [progress, setProgress] = useState(0);
   const [selectedModel, setSelectedModel] = useState(MODELS[0].path);
@@ -98,13 +100,47 @@ export default function Home() {
     setSelectedModel(e.target.value);
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      console.log("Uploaded file:", file.name);
+      alert(
+        "Model upload functionality is not implemented yet. But we see your file!"
+      );
+    }
+  };
+
+  const newChat = () => {
+    setMessages([INITIAL_MESSAGE]);
+  };
+
   return (
     <div className="flex h-screen flex-col bg-zinc-50 font-sans dark:bg-black">
-      <header className="flex items-center justify-between p-4 border-b dark:border-zinc-800">
+      <header className="flex flex-col md:flex-row items-center justify-between p-4 border-b dark:border-zinc-800 gap-4">
         <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">
           Chat
         </h1>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 flex-wrap justify-center">
+          <button
+            className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
+            onClick={newChat}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            <span className="hidden sm:inline">New Chat</span>
+          </button>
           <select
             className="h-10 px-3 rounded-md bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white"
             value={selectedModel}
@@ -120,6 +156,53 @@ export default function Home() {
             Model: {status}
             {status === "Loading model..." && ` (${progress.toFixed(2)}%)`}
           </div>
+          <a
+            href="https://huggingface.co/models?library=transformers.js"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            <span className="hidden sm:inline">Download</span>
+          </a>
+          <label className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 cursor-pointer">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <span className="hidden sm:inline">Upload</span>
+            <input
+              type="file"
+              className="hidden"
+              onChange={handleFileChange}
+              multiple
+            />
+          </label>
         </div>
       </header>
 
@@ -159,11 +242,24 @@ export default function Home() {
             disabled={status !== "Ready"}
           />
           <button
-            className="h-10 px-5 rounded-r-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 disabled:bg-gray-400"
+            className="h-10 px-5 flex items-center justify-center rounded-r-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 disabled:bg-gray-400"
             onClick={sendMessage}
             disabled={status !== "Ready"}
           >
-            Send
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="22" y1="2" x2="11" y2="13" />
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
           </button>
         </div>
       </footer>
