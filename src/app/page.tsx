@@ -3,11 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 
 const MODELS = [
-  { name: "LaMini-T5-61M", path: "Xenova/LaMini-T5-61M" },
-  { name: "T5-Small-SSM-NQ", path: "Xenova/t5-small-ssm-nq" },
-  { name: "DistilBERT-Base-SSM-NQ", path: "Xenova/distilbert-base-ssm-nq" },
-  { name: "GPT2-Medium", path: "Xenova/gpt2-medium" },
-  { name: "BLOOM-560M", path: "Xenova/bloom-560m" },
+  { name: "LaMini-T5-61M", path: "Xenova/LaMini-T5-61M" }
 ];
 
 export default function Home() {
