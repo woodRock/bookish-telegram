@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { JSDOM } from "jsdom";
+import { Readability } from "@mozilla/readability";
 
 export async function web_search(query: string) {
   const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
@@ -30,6 +31,12 @@ export async function web_search(query: string) {
     const results: { title: string; link: string; snippet: string }[] = [];
 
     $(".result").each((i, el) => {
+      // DuckDuckGo ads often have a class like 'result--ad' or are in specific containers
+      // We'll try to filter them out. This might need adjustment if DDG changes its HTML.
+      if ($(el).hasClass("result--ad") || $(el).find(".badge--ad").length > 0) {
+        return; // Skip this ad result
+      }
+
       const title = $(el).find(".result__title a").text().trim();
       const link = $(el).find(".result__url").attr("href");
       const snippet = $(el).find(".result__snippet").text().trim();
@@ -38,11 +45,18 @@ export async function web_search(query: string) {
         results.push({ title, link, snippet });
       }
     });
-    console.log(`Found ${results.length} search results.`);
+    console.log(`Found ${results.length} non-ad search results.`);
 
     if (results.length > 0 && results[0].link) {
       firstResultLink = results[0].link;
       console.log(`Attempting to fetch content from first result: ${firstResultLink}`);
+
+      // Basic validation for the link
+      if (!firstResultLink.startsWith("http://") && !firstResultLink.startsWith("https://")) {
+        console.warn(`Skipping non-HTTP/HTTPS link: ${firstResultLink}`);
+        return { searchResults: results, pageContent: "", firstResultLink: "" };
+      }
+
       try {
         const pageResponse = await fetch(firstResultLink, {
           headers: {
@@ -55,20 +69,8 @@ export async function web_search(query: string) {
 
         if (pageResponse.ok) {
           const pageHtml = await pageResponse.text();
-          const dom = new JSDOM(pageHtml);
-          const document = dom.window.document;
-
-          // A basic attempt to extract main content
-          // This can be highly unreliable and needs more sophisticated logic for real-world use
-          const paragraphs = document.querySelectorAll("p");
-          let extractedText = "";
-          paragraphs.forEach((p) => {
-            extractedText += p.textContent + "\n";
-          });
-          pageContent = extractedText.trim().substring(0, 2000); // Limit content to avoid huge prompts
-          console.log(`Extracted ${pageContent.length} characters from the first result page.`);
-        } else {
-          console.warn(`Could not fetch content from ${firstResultLink}, status: ${pageResponse.status}`);
+          console.log("Fetched page HTML (first 500 chars):", pageHtml.substring(0, 500)); // Log a snippet of HTML
+          pageContent = pageHtml.substring(0, 10000); // Limit to first 10,000 characters
         }
       } catch (pageError) {
         console.error(`Error fetching or parsing first result page (${firstResultLink}):`, pageError);

@@ -32,9 +32,14 @@ self.addEventListener("message", async (event) => {
   });
 
   if (messages && messages.length > 0) {
-    const prompt =
-      messages.map((msg) => `${msg.role}: ${msg.content}`).join("\n") +
-      "\nassistant:";
+    const prompt = messages
+      .map((msg) => {
+        if (msg.role === "system") {
+          return msg.content; // System messages are direct instructions
+        }
+        return `${msg.role}: ${msg.content}`;
+      })
+      .join("\n") + "\nassistant:";
 
     const stream = await generator(prompt, {
       max_new_tokens: 200,
