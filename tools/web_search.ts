@@ -70,7 +70,25 @@ export async function web_search(query: string) {
         if (pageResponse.ok) {
           const pageHtml = await pageResponse.text();
           console.log("Fetched page HTML (first 500 chars):", pageHtml.substring(0, 500)); // Log a snippet of HTML
-          pageContent = pageHtml.substring(0, 10000); // Limit to first 10,000 characters
+          
+          // Use Readability to extract the main content
+          try {
+            const dom = new JSDOM(pageHtml, { url: firstResultLink });
+            const reader = new Readability(dom.window.document);
+            const article = reader.parse();
+            if (article && article.textContent) {
+              pageContent = article.textContent;
+            } else {
+              // Fallback to just grabbing the text from the body if Readability fails
+              const $page = cheerio.load(pageHtml);
+              pageContent = $page("body").text().substring(0, 10000);
+            }
+          } catch (e) {
+            console.error("Could not parse page content with Readability, falling back to raw text", e);
+            // Fallback for safety
+            const $page = cheerio.load(pageHtml);
+            pageContent = $page("body").text().substring(0, 10000);
+          }
         }
       } catch (pageError) {
         console.error(`Error fetching or parsing first result page (${firstResultLink}):`, pageError);

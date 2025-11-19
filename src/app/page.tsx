@@ -2,11 +2,25 @@
 
 import { useState, useEffect, useRef } from "react";
 
-const MODELS = [    
+const MODELS = [
   { name: "Flan-T5-Small", path: "Xenova/flan-t5-small" },
   { name: "Flan-T5-Base", path: "Xenova/flan-t5-base" },
+  { name: "LaMini-Flan-T5-783M", path: "Xenova/LaMini-Flan-T5-783M" },
+  { name: "Flan-Alpaca-Large", path: "Xenova/flan-alpaca-large" },
   { name: "LaMini-T5-61M", path: "Xenova/LaMini-T5-61M" },
 ];
+
+const SYSTEM_PROMPT = {
+  role: "system",
+  content: `You are a helpful and friendly AI assistant, designed to run locally in the user's browser. Your goal is to provide accurate, concise, and relevant answers.
+
+**Instructions:**
+- Be conversational and approachable.
+- If you don't know the answer or a question is beyond your capabilities, be honest and say so.
+- Do not make up information. Your knowledge is based on the model you are running.
+- Keep your answers concise and to the point, unless the user asks for more detail.
+- You can perform web searches if the user enables "Search Mode". Use the provided search results to answer the question.`
+};
 
 const INITIAL_MESSAGE = {
   role: "assistant",
@@ -155,6 +169,9 @@ export default function Home() {
     const isExplicitSearch = input.startsWith("/search ");
     const isImplicitSearch = isSearchMode && !isExplicitSearch;
 
+    let workerMessages = newMessages.filter(msg => msg.role !== 'system');
+    let systemPrompt = SYSTEM_PROMPT;
+
     if (isExplicitSearch || isImplicitSearch) {
       setIsSearching(true);
       setStatus("Searching...");
@@ -165,86 +182,41 @@ export default function Home() {
       try {
         const response = await fetch("/api/search", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query }),
         });
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
         const { searchResults, pageContent, firstResultLink } = await response.json();
-
         const formattedResults = searchResults
-          .map(
-            (result: any, index: number) =>
-              `Result ${index + 1}:\nTitle: ${result.title}\nLink: ${
-                result.link
-              }\nSnippet: ${result.snippet}`
-          )
+          .map((result: any, i: number) => `Result ${i + 1}:\nTitle: ${result.title}\nLink: ${result.link}\nSnippet: ${result.snippet}`)
           .join("\n\n");
 
-        let llmPrompt = `You are an AI assistant. Your task is to answer the user's question based *only* on the provided search results and page content. Think step-by-step to analyze the information and then provide a concise summary as the answer.
-
-User's Question: "${query}"
-
-Search Results:
-${formattedResults}`;
-
+        let searchPromptContent = `You are an AI assistant. Your task is to answer the user's question based *only* on the provided search results and page content.\n\nUser's Question: "${query}"\n\nSearch Results:\n${formattedResults}`;
         if (pageContent) {
-          llmPrompt += `\n\nContent from First Linked Page (${firstResultLink}):
-${pageContent}`;
+          searchPromptContent += `\n\nContent from First Linked Page (${firstResultLink}):\n${pageContent}`;
         }
+        searchPromptContent += "\n\nAnswer the user's question based on the above information.";
+        
+        systemPrompt = { role: "system", content: searchPromptContent };
 
-        llmPrompt += `\n\nStep-by-step thinking process:
-1. Analyze the user's question.
-2. Review the search results and page content for relevant information.
-3. Synthesize the findings to directly answer the question.
-4. Formulate a concise summary of the answer.
-
-Concise Answer:`;
-
-        // Send the combined prompt to the LLM worker
-        if (worker.current) {
-          setStatus("Generating answer from search results...");
-          worker.current.postMessage({
-            messages: [...newMessages, { role: "user", content: llmPrompt }],
-            model: selectedModel,
-          });
-        }
       } catch (error) {
         console.error("Search failed:", error);
         const errorMessage = { role: "assistant", content: "Sorry, I couldn't perform the search." };
         setMessages((prev) => [...prev, errorMessage]);
-        setChatHistory((prev) =>
-          prev.map((chat) =>
-            chat.id === currentChatId ? { ...chat, messages: [...newMessages, errorMessage] } : chat
-          )
-        );
+        return; // Stop further processing
       } finally {
         setIsSearching(false);
-        // Status will be set to "Ready" by the worker after LLM response
       }
-    } else if (worker.current) {
+    } else if (isDeepThinkMode) {
+      const deepThinkPrompt = `You are an AI assistant. Think step-by-step to answer the user's request. First, outline your thought process, then provide the final answer.\n\nThought Process:\n1. Analyze the user's request.\n2. Break down the request into smaller, manageable parts.\n3. Consider potential approaches and relevant information.\n4. Formulate a step-by-step plan to address the request.\n\nFinal Answer:`;
+      systemPrompt = { role: "system", content: deepThinkPrompt };
+    }
+
+    if (worker.current) {
       setStatus("Generating...");
-      let finalMessages = newMessages;
-
-      if (isDeepThinkMode) {
-        const deepThinkPrompt = `You are an AI assistant. Think step-by-step to answer the user's request. First, outline your thought process, then provide the final answer.
-
-Thought Process:
-1. Analyze the user's request.
-2. Break down the request into smaller, manageable parts.
-3. Consider potential approaches and relevant information.
-4. Formulate a step-by-step plan to address the request.
-
-Final Answer:`;
-        finalMessages = [...newMessages, { role: "system", content: deepThinkPrompt }];
-      }
-
-      worker.current.postMessage({ messages: finalMessages, model: selectedModel });
+      worker.current.postMessage({ messages: [systemPrompt, ...workerMessages], model: selectedModel });
     }
   };
 
@@ -267,12 +239,12 @@ Final Answer:`;
     const newChatEntry = {
       id: newId,
       name: "New Chat", // Temporary name, will be summarized by LLM
-      messages: [INITIAL_MESSAGE],
+      messages: [SYSTEM_PROMPT, INITIAL_MESSAGE],
       timestamp: Date.now(),
     };
     setChatHistory((prev) => [newChatEntry, ...prev]); // Add new chat to top
     setCurrentChatId(newId);
-    setMessages([INITIAL_MESSAGE]);
+    setMessages([SYSTEM_PROMPT, INITIAL_MESSAGE]);
   };
 
   const loadChat = (id: string) => {
@@ -474,7 +446,7 @@ Final Answer:`;
           ref={chatContainerRef}
           className="flex-1 overflow-y-auto p-4 space-y-4"
         >
-          {messages.map((msg, i) => (
+          {messages.filter(msg => msg.role !== 'system').map((msg, i) => (
             <div
               key={i}
               className={`flex ${

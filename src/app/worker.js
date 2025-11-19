@@ -32,7 +32,8 @@ self.addEventListener("message", async (event) => {
   });
 
   if (messages && messages.length > 0) {
-    const prompt = messages
+    const truncatedMessages = messages.slice(-10); // Keep the last 10 messages
+    const prompt = truncatedMessages
       .map((msg) => {
         if (msg.role === "system") {
           return msg.content; // System messages are direct instructions
