@@ -4,6 +4,7 @@ import { pipeline } from "@xenova/transformers";
 import { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import { evaluate } from "mathjs";
+import { superheroPrompts } from "@/lib/superheroPrompts";
 
 const ChatMessage = ({ message }: { message: { role: string; content: string } }) => {
   const { role, content } = message;
@@ -82,6 +83,7 @@ export default function Home() {
   const [isWiki, setIsWiki] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isCharacterModalOpen, setIsCharacterModalOpen] = useState(false);
   const [chatHistory, setChatHistory] = useState<
     { id: string; name: string; messages: { role: string; content: string }[]; timestamp: number }[]
   >([]);
@@ -96,6 +98,19 @@ export default function Home() {
   const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [modelToDownload, setModelToDownload] = useState("");
+  const [selectedSuperheroKey, setSelectedSuperheroKey] = useState<string | null>(null);
+
+  const handleCharacterSelect = (key: string) => {
+    const character = superheroPrompts[key];
+    if (character) {
+      setSystemPrompt(character.prompt);
+      setSelectedSuperheroKey(key);
+      setIsCharacterModalOpen(false);
+    }
+  };
+
+  console.log("superheroPrompts:", superheroPrompts);
+  console.log("Keys:", Object.keys(superheroPrompts));
 
   const worker = useRef<Worker | null>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
@@ -549,12 +564,12 @@ export default function Home() {
     const newChatEntry = {
       id: newId,
       name: "New Chat", // Temporary name, will be summarized by LLM
-      messages: [SYSTEM_PROMPT, INITIAL_MESSAGE],
+      messages: [{ role: "system", content: systemPrompt }, INITIAL_MESSAGE],
       timestamp: Date.now(),
     };
     setChatHistory((prev) => [newChatEntry, ...prev]); // Add new chat to top
     setCurrentChatId(newId);
-    setMessages([SYSTEM_PROMPT, INITIAL_MESSAGE]);
+    setMessages([{ role: "system", content: systemPrompt }, INITIAL_MESSAGE]);
   };
 
   const loadChat = (id: string) => {
@@ -670,6 +685,16 @@ export default function Home() {
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
             <span className="hidden sm:inline">New Chat</span>
+          </button>
+          <button
+            className="h-10 w-10 flex items-center justify-center rounded-md bg-gray-200 dark:bg-gray-700"
+            onClick={() => setIsCharacterModalOpen(true)}
+            title="Select Character"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-user-round">
+              <circle cx="12" cy="8" r="5" />
+              <path d="M20 21a8 8 0 0 0-16 0" />
+            </svg>
           </button>
           <button
             className="h-10 w-10 flex items-center justify-center rounded-md bg-gray-200 dark:bg-gray-700"
@@ -1110,8 +1135,49 @@ export default function Home() {
         </div>
       )}
 
-      
+      {isCharacterModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-zinc-800 p-6 rounded-lg max-w-4xl w-full mx-4">
+            <h2 className="text-2xl font-bold mb-4 text-black dark:text-white">
+              Select a Character
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-96 overflow-y-auto">
+              {Object.entries(superheroPrompts).map(([key, character]) => (
+                <div
+                  key={key}
+                  className={`p-4 border rounded-md ${
+                    selectedSuperheroKey === key
+                      ? "border-blue-500 ring-2 ring-blue-500"
+                      : "border-zinc-300 dark:border-zinc-700"
+                  } bg-zinc-100 dark:bg-zinc-900`}
+                >
+                  <h3 className="text-lg font-semibold mb-2 text-black dark:text-white">
+                    {character.name}
+                  </h3>
+                  <p className="text-sm text-zinc-700 dark:text-zinc-300 line-clamp-4">
+                    {character.prompt}
+                  </p>
+                  <button
+                    className="mt-4 w-full h-10 px-5 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
+                    onClick={() => handleCharacterSelect(key)}
+                  >
+                    Select
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              className="mt-6 h-10 px-5 rounded-md bg-gray-400 text-white font-medium transition-colors hover:bg-gray-500"
+              onClick={() => setIsCharacterModalOpen(false)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+
 
