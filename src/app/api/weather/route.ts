@@ -16,11 +16,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Location is required" }, { status: 400 });
     }
 
-    // 1. Geocode the location to get latitude and longitude using Nominatim
-    const geocodeUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(location)}&format=json&limit=1`;
+    // 1. Geocode the location to get latitude and longitude
+    const geocodeUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1`;
     const geocodeRes = await fetch(geocodeUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36' // Nominatim requires a user-agent
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
       },
       signal: AbortSignal.timeout(20000) // 20 second timeout
     });
@@ -33,11 +33,12 @@ export async function POST(request: Request) {
       throw new Error("Failed to parse geocode JSON response");
     }
 
-    if (!geocodeData || geocodeData.length === 0) {
+    if (!geocodeData.results || geocodeData.results.length === 0) {
       return NextResponse.json({ error: `Could not find location: ${location}` }, { status: 404 });
     }
 
-    const { lat: latitude, lon: longitude, display_name: displayLocation } = geocodeData[0];
+    const { latitude, longitude, name, admin1, country } = geocodeData.results[0];
+    const displayLocation = `${name}${admin1 ? `, ${admin1}` : ''}${country ? `, ${country}`: ''}`;
 
     // 2. Get the weather forecast for the location
     const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`;
@@ -67,9 +68,7 @@ export async function POST(request: Request) {
     const weatherReport = `The current weather in ${displayLocation} is:
 - Temperature: ${temperature}°C
 - Wind Speed: ${windspeed} km/h
-- Conditions: ${weatherDescription}
-
-(Location data © OpenStreetMap contributors)`;
+- Conditions: ${weatherDescription}`;
 
     return NextResponse.json({ weatherReport });
 
