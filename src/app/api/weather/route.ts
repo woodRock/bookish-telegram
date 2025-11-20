@@ -24,12 +24,12 @@ export async function POST(request: Request) {
       },
       signal: AbortSignal.timeout(20000) // 20 second timeout
     });
+    const geocodeText = await geocodeRes.text();
     let geocodeData;
     try {
-      geocodeData = await geocodeRes.json();
+      geocodeData = JSON.parse(geocodeText);
     } catch (error) {
-      const text = await geocodeRes.text();
-      console.error("Failed to parse geocode JSON response:", text);
+      console.error("Failed to parse geocode JSON response:", geocodeText);
       throw new Error("Failed to parse geocode JSON response");
     }
 
@@ -47,12 +47,12 @@ export async function POST(request: Request) {
       },
       signal: AbortSignal.timeout(20000) // 20 second timeout
     });
+    const weatherText = await weatherRes.text();
     let weatherData;
     try {
-      weatherData = await weatherRes.json();
+      weatherData = JSON.parse(weatherText);
     } catch (error) {
-      const text = await weatherRes.text();
-      console.error("Failed to parse weather JSON response:", text);
+      console.error("Failed to parse weather JSON response:", weatherText);
       throw new Error("Failed to parse weather JSON response");
     }
 
