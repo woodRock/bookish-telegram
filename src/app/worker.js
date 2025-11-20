@@ -19,7 +19,7 @@ class PipelineSingleton {
 }
 
 self.addEventListener("message", async (event) => {
-  const { messages, model } = event.data;
+  const { messages, model, temperature, topP } = event.data;
 
   let generator = await PipelineSingleton.getInstance(model, (p) => {
     let progress = 0;
@@ -44,8 +44,8 @@ self.addEventListener("message", async (event) => {
 
     const stream = await generator(prompt, {
       max_new_tokens: 200,
-      temperature: 0.7,
-      top_k: 50,
+      temperature: temperature,
+      top_p: topP,
       do_sample: true,
       repetition_penalty: 1.1,
       stream: true,

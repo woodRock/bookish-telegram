@@ -87,6 +87,8 @@ export default function Home() {
   const [activeSuggestion, setActiveSuggestion] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [chatHistorySearch, setChatHistorySearch] = useState("");
+  const [temperature, setTemperature] = useState(0.5);
+  const [topP, setTopP] = useState(0.5);
 
   const worker = useRef<Worker | null>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
@@ -448,7 +450,12 @@ export default function Home() {
 
     if (worker.current) {
       setStatus("Generating...");
-      worker.current.postMessage({ messages: [systemPrompt, ...workerMessages], model: selectedModel });
+      worker.current.postMessage({
+        messages: [systemPrompt, ...workerMessages],
+        model: selectedModel,
+        temperature,
+        topP,
+      });
     }
   };
 
@@ -1022,6 +1029,30 @@ export default function Home() {
                   </svg>
                   <span className="hidden sm:inline">Deep Think</span>
                 </button>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Temperature</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={temperature}
+                  onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Top P</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={topP}
+                  onChange={(e) => setTopP(parseFloat(e.target.value))}
+                  className="w-full"
+                />
               </div>
             </div>
             <button
