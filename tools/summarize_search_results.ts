@@ -1,7 +1,7 @@
-import { pipeline } from "@xenova/transformers";
+import { pipeline, SummarizationPipeline, SummarizationSingle } from "@xenova/transformers";
 
 // Initialize the summarizer pipeline once
-let summarizer: any = null;
+let summarizer: SummarizationPipeline | null = null;
 async function getSummarizer() {
   if (!summarizer) {
     summarizer = await pipeline('summarization', 'Xenova/t5-base'); // Changed to t5-base
@@ -36,7 +36,7 @@ export async function summarizeSearchResults(
   }
 
   try {
-    const output = await summarizerInstance(textToSummarize, {
+    const output: any = await summarizerInstance(textToSummarize, {
       max_new_tokens: 100, // Summary length
       min_new_tokens: 20,
       do_sample: true,

@@ -1,10 +1,11 @@
 "use client";
 
-import { pipeline } from "@xenova/transformers";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import { evaluate } from "mathjs";
 import { superheroPrompts } from "@/lib/superheroPrompts";
+import JSZip from "jszip";
+import { saveAs } from "file-saver";
 
 const ChatMessage = ({ message }: { message: { role: string; content: string } }) => {
   const { role, content } = message;
@@ -65,6 +66,17 @@ const INITIAL_MESSAGE = {
 const COMMANDS = ["/search", "/summarize", "/weather", "/wiki", "/calculate"];
 
 
+interface SearchResult {
+  title: string;
+  link: string;
+  snippet: string;
+}
+
+interface ModelConfig {
+  architectures?: string[];
+  // Add other properties from config.json if needed
+}
+
 export default function Home() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<
@@ -76,7 +88,7 @@ export default function Home() {
   const [customModelPath, setCustomModelPath] = useState("");
   const [selectedModel, setSelectedModel] = useState(INITIAL_MODELS[0].path);
   const [isModelInfoModalOpen, setIsModelInfoModalOpen] = useState(false);
-  const [modelInfo, setModelInfo] = useState<any>(null);
+  const [modelInfo, setModelInfo] = useState<Record<string, unknown> | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [isSearchMode, setIsSearchMode] = useState(false);
   const [isDeepThinkMode, setIsDeepThinkMode] = useState(false);
@@ -95,9 +107,6 @@ export default function Home() {
   const [temperature, setTemperature] = useState(0.5);
   const [topP, setTopP] = useState(0.5);
   const [systemPrompt, setSystemPrompt] = useState(SYSTEM_PROMPT.content);
-  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [modelToDownload, setModelToDownload] = useState("");
   const [selectedSuperheroKey, setSelectedSuperheroKey] = useState<string | null>(null);
 
   const handleCharacterSelect = (key: string) => {
@@ -159,6 +168,19 @@ export default function Home() {
     }
   }, [currentChatId, chatHistory]);
 
+  const newChat = useCallback(() => {
+    const newId = crypto.randomUUID();
+    const newChatEntry = {
+      id: newId,
+      name: "New Chat", // Temporary name, will be summarized by LLM
+      messages: [{ role: "system", content: systemPrompt }, INITIAL_MESSAGE],
+      timestamp: Date.now(),
+    };
+    setChatHistory((prev) => [newChatEntry, ...prev]); // Add new chat to top
+    setCurrentChatId(newId);
+    setMessages([{ role: "system", content: systemPrompt }, INITIAL_MESSAGE]);
+  }, [systemPrompt]);
+
   useEffect(() => {
     const isMobile = window.innerWidth < 768;
     if (isMobile) {
@@ -167,7 +189,7 @@ export default function Home() {
     if (!currentChatId) {
       newChat(); // Create a new chat on initial load
     }
-  }, [currentChatId]);
+  }, [currentChatId, newChat]);
 
   useEffect(() => {
     if (!worker.current) {
@@ -299,7 +321,7 @@ export default function Home() {
     const isWikiImplicit = isWiki && !isWikiExplicit;
     const isCalculate = input.startsWith("/calculate ");
 
-    let workerMessages = newMessages.filter(msg => msg.role !== 'system');
+    const workerMessages = newMessages.filter(msg => msg.role !== 'system');
 
     if (isCalculate) {
       const expression = input.substring("/calculate ".length).trim();
@@ -414,7 +436,7 @@ export default function Home() {
 
         const { searchResults, pageContent, firstResultLink } = await response.json();
         const formattedResults = searchResults
-          .map((result: any, i: number) => `Result ${i + 1}:\nTitle: ${result.title}\nLink: ${result.link}\nSnippet: ${result.snippet}`)
+          .map((result: SearchResult, i: number) => `Result ${i + 1}:\nTitle: ${result.title}\nLink: ${result.link}\nSnippet: ${result.snippet}`)
           .join("\n\n");
 
         let searchPromptContent = `You are an AI assistant. Your task is to answer the user's question based *only* on the provided search results and page content.\n\nUser's Question: \"${query}\"\n\nSearch Results:\n${formattedResults}`;
@@ -425,9 +447,9 @@ export default function Home() {
         
         systemPromptMessage = { role: "system", content: searchPromptContent };
 
-      } catch (error) {
+      } catch (error: unknown) {
         console.error("Search failed:", error);
-        const errorMessage = { role: "assistant", content: "Sorry, I couldn't perform the search." };
+        const errorMessage = { role: "assistant", content: `Sorry, I couldn't perform the search. ${(error as Error).message}` };
         setMessages((prev) => [...prev, errorMessage]);
         setIsGenerating(false);
         return; // Stop further processing
@@ -456,9 +478,9 @@ export default function Home() {
         
         systemPromptMessage = { role: "system", content: wikiPromptContent };
 
-      } catch (error) {
+      } catch (error: unknown) {
         console.error("Wikipedia RAG failed:", error);
-        const errorMessage = { role: "assistant", content: "Sorry, I couldn't fetch information from Wikipedia." };
+        const errorMessage = { role: "assistant", content: `Sorry, I couldn't fetch information from Wikipedia. ${(error as Error).message}` };
         setMessages((prev) => [...prev, errorMessage]);
         setIsGenerating(false);
         return; // Stop further processing
@@ -482,23 +504,47 @@ export default function Home() {
   };
 
   const downloadModel = async () => {
-    setStatus("Downloading model...");
+    setStatus("Preparing download...");
+    const zip = new JSZip();
+    const filesToAttempt = [
+      'config.json',
+      'model.safetensors',
+      'pytorch_model.bin',
+      'tf_model.h5',
+      'tokenizer.json',
+      'tokenizer_config.json',
+      'special_tokens_map.json',
+      'generation_config.json',
+    ];
+    let filesAdded = 0;
+
     try {
-      const downloader = await pipeline("text2text-generation", selectedModel, {
-        progress_callback: (p: any) => {
-          let progress = 0;
-          if (p.status === "download" && p.total > 0) {
-            progress = (p.loaded / p.total) * 100;
-          } else if (p.progress) {
-            progress = p.progress;
-          }
-          setDownloadProgress(progress);
-        },
-      });
+      for (const fileName of filesToAttempt) {
+        const response = await fetch(`/api/get-model-file?modelPath=${selectedModel}&fileName=${fileName}`);
+        if (response.ok && response.body) {
+          const blob = await response.blob();
+          zip.file(fileName, blob);
+          filesAdded++;
+        } else {
+          console.warn(`Could not fetch ${fileName} for ${selectedModel}: ${response.statusText}`);
+        }
+      }
+
+      if (filesAdded === 0) {
+        alert("No model files found to download.");
+        setStatus("Ready");
+        return;
+      }
+
+      setStatus("Generating zip file...");
+      const content = await zip.generateAsync({ type: "blob" });
+      saveAs(content, `${selectedModel.replace('/', '-')}-weights.zip`);
+
       setStatus("Ready");
-    } catch (error) {
+      alert("Model download initiated!");
+    } catch (error: unknown) {
       console.error("Failed to download model:", error);
-      alert("Failed to download model. Please check the model path and your internet connection.");
+      alert(`Failed to download model: ${(error as Error).message}. Please check the model path.`);
       setStatus("Ready");
     }
   };
@@ -531,45 +577,63 @@ export default function Home() {
       const configUrl = `https://huggingface.co/${newModelPath}/raw/main/config.json`;
       const configRes = await fetch(configUrl);
       if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${newModelPath}`);
-      const configData = await configRes.json();
+      const configData: ModelConfig = await configRes.json();
 
       // Check if the model is a text2text generation model.
       // A simple heuristic: check for "ConditionalGeneration" in architectures.
-      const isText2Text = configData.architectures?.some((arch: string) => arch.endsWith("ForConditionalGeneration"));
+      const isText2Text = configData.architectures && (configData.architectures as string[]).some((arch: string) => arch.endsWith("ForConditionalGeneration"));
 
       if (!isText2Text) {
         alert("Warning: This model is not a text-to-text generation model and may not work as expected.");
       }
 
-    } catch (error) {
+    } catch (error: unknown) {
       console.error("Error validating model:", error);
-      alert("Could not validate the selected model. It might be incompatible.");
+      alert(`Could not validate the selected model. It might be incompatible. ${(error as Error).message}`);
     } finally {
       // setStatus will be updated by the worker's loading progress
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      console.log("Uploaded file:", file.name);
-      alert(
-        "Model upload functionality is not implemented yet. But we see your file!"
-      );
-    }
-  };
+    if (!file) return;
 
-  const newChat = () => {
-    const newId = crypto.randomUUID();
-    const newChatEntry = {
-      id: newId,
-      name: "New Chat", // Temporary name, will be summarized by LLM
-      messages: [{ role: "system", content: systemPrompt }, INITIAL_MESSAGE],
-      timestamp: Date.now(),
-    };
-    setChatHistory((prev) => [newChatEntry, ...prev]); // Add new chat to top
-    setCurrentChatId(newId);
-    setMessages([{ role: "system", content: systemPrompt }, INITIAL_MESSAGE]);
+    setStatus("Uploading model...");
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const response = await fetch("/api/upload-model", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const { modelPath } = await response.json();
+      const modelName = modelPath.split('/').pop(); // Extract model name from path
+      const newModel = { name: modelName, path: modelPath };
+
+      setModels((prevModels) => {
+        const updatedModels = [...prevModels, newModel];
+        // Persist to localStorage
+        const customModels = updatedModels.filter(m => !INITIAL_MODELS.some(initModel => initModel.path === m.path));
+        localStorage.setItem("customModels", JSON.stringify(customModels));
+        return updatedModels;
+      });
+      setSelectedModel(modelPath); // Select the newly uploaded model
+      alert("Model uploaded and extracted successfully!");
+    } catch (error: unknown) {
+      console.error("Error uploading model:", error);
+      alert(`Failed to upload model: ${(error as Error).message}`);
+    } finally {
+      setStatus("Ready");
+      e.target.value = ''; // Clear the file input
+    }
   };
 
   const loadChat = (id: string) => {

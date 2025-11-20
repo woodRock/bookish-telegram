@@ -28,8 +28,8 @@ export async function POST(request: Request) {
     let geocodeData;
     try {
       geocodeData = JSON.parse(geocodeText);
-    } catch (error) {
-      console.error("Failed to parse geocode JSON response:", geocodeText);
+    } catch (error: unknown) {
+      console.error("Failed to parse geocode JSON response:", error);
       throw new Error("Failed to parse geocode JSON response");
     }
 
@@ -52,8 +52,8 @@ export async function POST(request: Request) {
     let weatherData;
     try {
       weatherData = JSON.parse(weatherText);
-    } catch (error) {
-      console.error("Failed to parse weather JSON response:", weatherText);
+    } catch (error: unknown) {
+      console.error("Failed to parse weather JSON response:", error);
       throw new Error("Failed to parse weather JSON response");
     }
 
@@ -72,7 +72,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ weatherReport });
 
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error in weather API:", error);
     return NextResponse.json(
       { error: "Failed to get weather information" },
