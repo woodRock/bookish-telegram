@@ -33,7 +33,7 @@ const INITIAL_MESSAGE = {
     "Hello! I'm a local AI assistant. You can choose a model from the dropdown and start chatting.",
 };
 
-const COMMANDS = ["/search", "/summarize", "/weather"];
+const COMMANDS = ["/search", "/summarize", "/weather", "/wiki"];
 
 export default function Home() {
   const [input, setInput] = useState("");
@@ -50,7 +50,9 @@ export default function Home() {
   const [isSearching, setIsSearching] = useState(false);
   const [isSearchMode, setIsSearchMode] = useState(false);
   const [isDeepThinkMode, setIsDeepThinkMode] = useState(false);
+  const [isWiki, setIsWiki] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [chatHistory, setChatHistory] = useState<
     { id: string; name: string; messages: { role: string; content: string }[]; timestamp: number }[]
   >([]);
@@ -106,6 +108,10 @@ export default function Home() {
   }, [currentChatId, chatHistory]);
 
   useEffect(() => {
+    const isMobile = window.innerWidth < 768;
+    if (isMobile) {
+      setIsSidebarOpen(false);
+    }
     if (!currentChatId) {
       newChat(); // Create a new chat on initial load
     }
@@ -235,6 +241,10 @@ export default function Home() {
     const isImplicitSearch = isSearchMode && !isExplicitSearch;
     const isSummarize = input.startsWith("/summarize ");
     const isWeather = input.startsWith("/weather ");
+    const isWikiExplicit = input.startsWith("/wiki ");
+    const isWikiImplicit = isWiki && !isWikiExplicit;
+
+    let workerMessages = newMessages.filter(msg => msg.role !== 'system');
 
     if (isSummarize) {
       const textToSummarize = input.substring("/summarize ".length).trim();
@@ -301,7 +311,6 @@ export default function Home() {
       return; // Stop further processing
     }
 
-    let workerMessages = newMessages.filter(msg => msg.role !== 'system');
     let systemPrompt = SYSTEM_PROMPT;
 
     if (isExplicitSearch || isImplicitSearch) {
@@ -336,6 +345,36 @@ export default function Home() {
       } catch (error) {
         console.error("Search failed:", error);
         const errorMessage = { role: "assistant", content: "Sorry, I couldn't perform the search." };
+        setMessages((prev) => [...prev, errorMessage]);
+        return; // Stop further processing
+      } finally {
+        setIsSearching(false);
+      }
+    } else if (isWikiExplicit || isWikiImplicit) {
+      setIsSearching(true); // Use the same searching state
+      setStatus("Searching Wikipedia...");
+      const query = isWikiExplicit
+        ? input.substring("/wiki ".length).trim()
+        : input.trim();
+
+      try {
+        const response = await fetch("/api/wikipedia-rag", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query }),
+        });
+
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+        const { content } = await response.json();
+        
+        const wikiPromptContent = `You are an AI assistant. Your task is to answer the user's question based *only* on the provided Wikipedia article content.\n\nUser's Question: \"${query}\"\n\nWikipedia Content:\n${content}\n\nAnswer the user's question based on the above information.`;
+        
+        systemPrompt = { role: "system", content: wikiPromptContent };
+
+      } catch (error) {
+        console.error("Wikipedia RAG failed:", error);
+        const errorMessage = { role: "assistant", content: "Sorry, I couldn't fetch information from Wikipedia." };
         setMessages((prev) => [...prev, errorMessage]);
         return; // Stop further processing
       } finally {
@@ -471,7 +510,7 @@ export default function Home() {
       <header className="flex flex-col md:flex-row items-center justify-between p-4 border-b dark:border-zinc-800 gap-4">
         <div className="flex items-center gap-4">
           <button
-            className="h-10 w-10 flex items-center justify-center rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
+            className="h-10 w-10 flex items-center justify-center rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 md:hidden"
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             title="Toggle Chat History"
           >
@@ -517,86 +556,26 @@ export default function Home() {
             </svg>
             <span className="hidden sm:inline">New Chat</span>
           </button>
-          <select
-            className="h-10 px-3 rounded-md bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white"
-            value={selectedModel}
-            onChange={handleModelChange}
-          >
-            {models.map((model) => (
-              <option key={model.path} value={model.path}>
-                {model.name}
-              </option>
-            ))}
-          </select>
           <button
-            className="h-10 px-3 rounded-md bg-gray-200 dark:bg-gray-700"
-            onClick={showModelInfo}
-            title="Show model information"
+            className="h-10 w-10 flex items-center justify-center rounded-md bg-gray-200 dark:bg-gray-700"
+            onClick={() => setIsSettingsModalOpen(true)}
+            title="Settings"
           >
-            Info
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
           </button>
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              className="h-10 px-3 rounded-md bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white"
-              placeholder="HuggingFace model path"
-              value={customModelPath}
-              onChange={(e) => setCustomModelPath(e.target.value)}
-            />
-            <button
-              className="h-10 px-3 rounded-md bg-blue-600 text-white font-medium"
-              onClick={addCustomModel}
-            >
-              Add
-            </button>
-          </div>
-          <a
-            href="https://huggingface.co/models?library=transformers.js"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" y1="15" x2="12" y2="3" />
-            </svg>
-            <span className="hidden sm:inline">Download</span>
-          </a>
-          <label className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 cursor-pointer">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
-            </svg>
-            <span className="hidden sm:inline">Upload</span>
-            <input
-              type="file"
-              className="hidden"
-              onChange={handleFileChange}
-              multiple
-            />
-          </label>
         </div>
       </header>
 
@@ -605,7 +584,7 @@ export default function Home() {
         <div
           className={`flex-shrink-0 w-64 bg-zinc-100 dark:bg-zinc-900 border-r dark:border-zinc-800 transition-all duration-300 ease-in-out ${
             isSidebarOpen ? "translate-x-0" : "-translate-x-full"
-          }`}
+          } md:relative md:translate-x-0`}
         >
           <div className="p-4">
             <h2 className="text-lg font-semibold mb-4 text-black dark:text-zinc-50">
@@ -659,8 +638,7 @@ export default function Home() {
 
         {/* Main Chat Area */}
         <main
-          ref={chatContainerRef}
-          className="flex-1 overflow-y-auto p-4 space-y-4"
+          className={`flex-1 overflow-y-auto p-4 space-y-4 transition-all duration-300 ease-in-out md:ml-0`}
         >
           {messages.filter(msg => msg.role !== 'system').map((msg, i) => (
             <div
@@ -670,7 +648,7 @@ export default function Home() {
               }`}
             >
               <div
-                className={`max-w-lg rounded-lg px-4 py-2 ${
+                className={`max-w-lg md:max-w-2xl rounded-lg px-4 py-2 ${
                   msg.role === "user"
                     ? "bg-blue-600 text-white"
                     : "bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white"
@@ -724,65 +702,17 @@ export default function Home() {
             type="text"
             className="flex-1 p-2 border-none bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white focus:outline-none"
             placeholder={
-              isSearchMode ? "Type your search query..." : "Type your message..."
+              isSearchMode
+                ? "Type your search query..."
+                : isWiki
+                ? "Type your Wikipedia query..."
+                : "Type your message..."
             }
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             disabled={status !== "Ready" || isSearching}
           />
-          <button
-            className={`h-10 px-5 flex items-center justify-center ${
-              isSearchMode ? "bg-green-600" : "bg-gray-400"
-            } text-white font-medium transition-colors ${
-              isSearchMode ? "hover:bg-green-700" : "hover:bg-gray-500"
-            }`}
-            onClick={() => setIsSearchMode(!isSearchMode)}
-            disabled={status !== "Ready"}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <span className="hidden sm:inline">Search</span>
-          </button>
-          <button
-            className={`h-10 px-5 flex items-center justify-center ${
-              isDeepThinkMode ? "bg-purple-600" : "bg-gray-400"
-            } text-white font-medium transition-colors ${
-              isDeepThinkMode ? "hover:bg-purple-700" : "hover:bg-gray-500"
-            }`}
-            onClick={() => setIsDeepThinkMode(!isDeepThinkMode)}
-            disabled={status !== "Ready"}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12 20h9" />
-              <path d="M16.5 17.5L12 13 7.5 17.5" />
-              <path d="M7.5 6.5L12 11 16.5 6.5" />
-              <path d="M12 3v10" />
-            </svg>
-            <span className="hidden sm:inline">Deep Think</span>
-          </button>
           <button
             className="h-10 px-5 flex items-center justify-center bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 disabled:bg-gray-400"
             onClick={sendMessage}
@@ -820,6 +750,193 @@ export default function Home() {
             <button
               className="mt-6 h-10 px-5 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
               onClick={() => setIsModelInfoModalOpen(false)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isSettingsModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-zinc-800 p-6 rounded-lg max-w-2xl w-full mx-4">
+            <h2 className="text-2xl font-bold mb-4 text-black dark:text-white">
+              Settings
+            </h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Select Model</label>
+                <select
+                  className="h-10 px-3 w-full rounded-md bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white"
+                  value={selectedModel}
+                  onChange={handleModelChange}
+                >
+                  {models.map((model) => (
+                    <option key={model.path} value={model.path}>
+                      {model.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Add Custom Model</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    className="h-10 px-3 w-full rounded-md bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white"
+                    placeholder="HuggingFace model path"
+                    value={customModelPath}
+                    onChange={(e) => setCustomModelPath(e.target.value)}
+                  />
+                  <button
+                    className="h-10 px-3 rounded-md bg-blue-600 text-white font-medium"
+                    onClick={addCustomModel}
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                <button
+                  className="h-10 px-3 rounded-md bg-gray-200 dark:bg-gray-700"
+                  onClick={showModelInfo}
+                  title="Show model information"
+                >
+                  Info
+                </button>
+                <a
+                  href="https://huggingface.co/models?library=transformers.js"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  <span className="hidden sm:inline">Download Models</span>
+                </a>
+                <label className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 cursor-pointer">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" y1="3" x2="12" y2="15" />
+                  </svg>
+                  <span className="hidden sm:inline">Upload Model</span>
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={handleFileChange}
+                    multiple
+                  />
+                </label>
+              </div>
+              <div className="flex items-center gap-4">
+                <button
+                  className={`h-10 px-5 flex items-center justify-center ${
+                    isSearchMode ? "bg-green-600" : "bg-gray-400"
+                  } text-white font-medium transition-colors ${
+                    isSearchMode ? "hover:bg-green-700" : "hover:bg-gray-500"
+                  }`}
+                  onClick={() => setIsSearchMode(!isSearchMode)}
+                  disabled={status !== "Ready"}
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  <span className="hidden sm:inline">Search Mode</span>
+                </button>
+                <button
+                  className={`h-10 px-5 flex items-center justify-center ${
+                    isWiki ? "bg-blue-600" : "bg-gray-400"
+                  } text-white font-medium transition-colors ${
+                    isWiki ? "hover:bg-blue-700" : "hover:bg-gray-500"
+                  }`}
+                  onClick={() => setIsWiki(!isWiki)}
+                  disabled={status !== "Ready"}
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M12 20h9" />
+                    <path d="M16.5 17.5L12 13 7.5 17.5" />
+                    <path d="M7.5 6.5L12 11 16.5 6.5" />
+                    <path d="M12 3v10" />
+                  </svg>
+                  <span className="hidden sm:inline">Wiki Mode</span>
+                </button>
+                <button
+                  className={`h-10 px-5 flex items-center justify-center ${
+                    isDeepThinkMode ? "bg-purple-600" : "bg-gray-400"
+                  } text-white font-medium transition-colors ${
+                    isDeepThinkMode ? "hover:bg-purple-700" : "hover:bg-gray-500"
+                  }`}
+                  onClick={() => setIsDeepThinkMode(!isDeepThinkMode)}
+                  disabled={status !== "Ready"}
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M12 20h9" />
+                    <path d="M16.5 17.5L12 13 7.5 17.5" />
+                    <path d="M7.5 6.5L12 11 16.5 6.5" />
+                    <path d="M12 3v10" />
+                  </svg>
+                  <span className="hidden sm:inline">Deep Think</span>
+                </button>
+              </div>
+            </div>
+            <button
+              className="mt-6 h-10 px-5 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
+              onClick={() => setIsSettingsModalOpen(false)}
             >
               Close
             </button>
