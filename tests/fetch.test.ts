@@ -14,8 +14,8 @@ test('fetch should be able to fetch a known good URL', async () => {
   assert.ok(response.ok, 'response should be ok');
 });
 
-test('fetch should be able to fetch the Nominatim API', async () => {
-  const geocodeUrl = 'https://nominatim.openstreetmap.org/search?q=London&format=json&limit=1';
+test('fetch should be able to fetch the Open-Meteo Geocoding API', async () => {
+  const geocodeUrl = 'https://geocoding-api.open-meteo.com/v1/search?name=London&count=1';
   const response = await fetch(geocodeUrl, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
@@ -23,7 +23,7 @@ test('fetch should be able to fetch the Nominatim API', async () => {
   });
   assert.ok(response.ok, 'response should be ok');
   const data = await response.json();
-  assert.ok(Array.isArray(data) && data.length > 0, 'should return an array with at least one result');
+  assert.ok(data.hasOwnProperty('results') && Array.isArray(data.results) && data.results.length > 0, 'should return an array of results');
 });
 
 test('fetch should be able to fetch the Open-Meteo weather API', async () => {

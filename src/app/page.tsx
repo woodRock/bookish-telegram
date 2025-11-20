@@ -84,7 +84,7 @@ export default function Home() {
       if (currentChat && currentChat.name === "New Chat" && currentChat.messages.length > 1) {
         const firstUserMessage = currentChat.messages.find(msg => msg.role === "user")?.content;
         if (firstUserMessage) {
-          fetch("/api/summarize", {
+          fetch("/api/summarize-title", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ prompt: firstUserMessage }),
@@ -550,10 +550,6 @@ export default function Home() {
               Add
             </button>
           </div>
-          <div className="text-sm text-zinc-600 dark:text-zinc-400">
-            Model: {status}
-            {status === "Loading model..." && ` (${progress.toFixed(2)}%)`}
-          </div>
           <a
             href="https://huggingface.co/models?library=transformers.js"
             target="_blank"
@@ -684,6 +680,19 @@ export default function Home() {
               </div>
             </div>
           ))}
+          {status !== "Ready" && (
+            <div className="flex justify-start">
+              <div className="max-w-lg rounded-lg px-4 py-2 bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white flex items-center">
+                <div className="dots-container mr-4">
+                  <div className="dot-flashing"></div>
+                </div>
+                <div>
+                  {status}
+                  {status === "Loading model..." && ` (${progress.toFixed(2)}%)`}
+                </div>
+              </div>
+            </div>
+          )}
         </main>
       </div>
 
