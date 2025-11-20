@@ -1,5 +1,6 @@
 "use client";
 
+import { pipeline } from "@xenova/transformers";
 import { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import { evaluate } from "mathjs";
@@ -49,7 +50,9 @@ const SYSTEM_PROMPT = {
 **Available Tools:**
 - **/search <query>:** Searches the web for information.
 - **/summarize <text>:** Summarizes the provided text.
-- **/weather <location>:** Gets the current weather for a location.`
+- **/weather <location>:** Gets the current weather for a location.
+- **/wiki <query>:** Searches Wikipedia for information.
+- **/calculate <expression>:** Calculates a mathematical expression.`
 };
 
 const INITIAL_MESSAGE = {
@@ -89,6 +92,10 @@ export default function Home() {
   const [chatHistorySearch, setChatHistorySearch] = useState("");
   const [temperature, setTemperature] = useState(0.5);
   const [topP, setTopP] = useState(0.5);
+  const [systemPrompt, setSystemPrompt] = useState(SYSTEM_PROMPT.content);
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [modelToDownload, setModelToDownload] = useState("");
 
   const worker = useRef<Worker | null>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
@@ -372,7 +379,7 @@ export default function Home() {
       return; // Stop further processing
     }
 
-    let systemPrompt = SYSTEM_PROMPT;
+    let systemPromptMessage = { role: "system", content: systemPrompt };
 
     if (isExplicitSearch || isImplicitSearch) {
       setIsSearching(true);
@@ -401,7 +408,7 @@ export default function Home() {
         }
         searchPromptContent += "\n\nAnswer the user's question based on the above information.";
         
-        systemPrompt = { role: "system", content: searchPromptContent };
+        systemPromptMessage = { role: "system", content: searchPromptContent };
 
       } catch (error) {
         console.error("Search failed:", error);
@@ -432,7 +439,7 @@ export default function Home() {
         
         const wikiPromptContent = `You are an AI assistant. Your task is to answer the user's question based *only* on the provided Wikipedia article content.\n\nUser's Question: \"${query}\"\n\nWikipedia Content:\n${content}\n\nAnswer the user's question based on the above information.`;
         
-        systemPrompt = { role: "system", content: wikiPromptContent };
+        systemPromptMessage = { role: "system", content: wikiPromptContent };
 
       } catch (error) {
         console.error("Wikipedia RAG failed:", error);
@@ -445,18 +452,48 @@ export default function Home() {
       }
     } else if (isDeepThinkMode) {
       const deepThinkPrompt = `You are an AI assistant. Think step-by-step to answer the user's request. First, outline your thought process, then provide the final answer.\n\nThought Process:\n1. Analyze the user's request.\n2. Break down the request into smaller, manageable parts.\n3. Consider potential approaches and relevant information.\n4. Formulate a step-by-step plan to address the request.\n\nFinal Answer:`;
-      systemPrompt = { role: "system", content: deepThinkPrompt };
+      systemPromptMessage = { role: "system", content: deepThinkPrompt };
     }
 
     if (worker.current) {
       setStatus("Generating...");
       worker.current.postMessage({
-        messages: [systemPrompt, ...workerMessages],
+        messages: [systemPromptMessage, ...workerMessages],
         model: selectedModel,
         temperature,
         topP,
       });
     }
+  };
+
+  const downloadModel = async () => {
+    setStatus("Downloading model...");
+    try {
+      const downloader = await pipeline("text2text-generation", selectedModel, {
+        progress_callback: (p: any) => {
+          let progress = 0;
+          if (p.status === "download" && p.total > 0) {
+            progress = (p.loaded / p.total) * 100;
+          } else if (p.progress) {
+            progress = p.progress;
+          }
+          setDownloadProgress(progress);
+        },
+      });
+      setStatus("Ready");
+    } catch (error) {
+      console.error("Failed to download model:", error);
+      alert("Failed to download model. Please check the model path and your internet connection.");
+      setStatus("Ready");
+    }
+  };
+
+  const deleteModel = (modelPath: string) => {
+    const newModels = models.filter(m => m.path !== modelPath);
+    setModels(newModels);
+
+    const customModels = newModels.filter(m => !INITIAL_MODELS.some(initModel => initModel.path === m.path));
+    localStorage.setItem("customModels", JSON.stringify(customModels));
   };
 
   const stopGeneration = () => {
@@ -473,6 +510,7 @@ export default function Home() {
 
   const handleModelChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newModelPath = e.target.value;
+    setSelectedModel(newModelPath);
     setStatus("Validating model...");
     try {
       const configUrl = `https://huggingface.co/${newModelPath}/raw/main/config.json`;
@@ -485,19 +523,12 @@ export default function Home() {
       const isText2Text = configData.architectures?.some((arch: string) => arch.endsWith("ForConditionalGeneration"));
 
       if (!isText2Text) {
-        alert("This model is not a text-to-text generation model and is not compatible with the current pipeline. Please select a different model.");
-        // Revert the dropdown to the previous model
-        e.target.value = selectedModel;
-        setStatus("Ready");
-        return;
+        alert("Warning: This model is not a text-to-text generation model and may not work as expected.");
       }
-
-      setSelectedModel(newModelPath);
 
     } catch (error) {
       console.error("Error validating model:", error);
       alert("Could not validate the selected model. It might be incompatible.");
-      e.target.value = selectedModel;
     } finally {
       // setStatus will be updated by the worker's loading progress
     }
@@ -874,6 +905,13 @@ export default function Home() {
                     </option>
                   ))}
                 </select>
+                <button
+                  className="h-10 px-3 rounded-md bg-red-600 text-white font-medium"
+                  onClick={() => deleteModel(selectedModel)}
+                  disabled={INITIAL_MODELS.some(m => m.path === selectedModel)}
+                >
+                  Delete
+                </button>
               </div>
               <div>
                 <label className="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Add Custom Model</label>
@@ -901,11 +939,9 @@ export default function Home() {
                 >
                   Info
                 </button>
-                <a
-                  href="https://huggingface.co/models?library=transformers.js"
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <button
                   className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
+                  onClick={downloadModel}
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -922,8 +958,8 @@ export default function Home() {
                     <polyline points="7 10 12 15 17 10" />
                     <line x1="12" y1="15" x2="12" y2="3" />
                   </svg>
-                  <span className="hidden sm:inline">Download Models</span>
-                </a>
+                  <span className="hidden sm:inline">Download Model</span>
+                </button>
                 <label className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 cursor-pointer">
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -1054,6 +1090,15 @@ export default function Home() {
                   className="w-full"
                 />
               </div>
+              <div>
+                <label className="block mb-2 text-sm font-medium text-gray-900 dark:text-white">System Prompt</label>
+                <textarea
+                  className="w-full p-2 border rounded-md bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white"
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  rows={5}
+                />
+              </div>
             </div>
             <button
               className="mt-6 h-10 px-5 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
@@ -1064,6 +1109,8 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      
     </div>
   );
 }
