@@ -29,6 +29,8 @@ export async function POST(req: Request) {
     // 3. Summarize the content (for now, we'll just return the first paragraph)
     const firstParagraph = pageContent.split('\n')[0];
 
+    console.log("First paragraph:", firstParagraph);
+
     return NextResponse.json({ summary: firstParagraph });
 
   } catch (error) {

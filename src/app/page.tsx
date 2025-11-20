@@ -1,6 +1,31 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
+import { evaluate } from "mathjs";
+
+const ChatMessage = ({ message }: { message: { role: string; content: string } }) => {
+  const { role, content } = message;
+  const isUser = role === "user";
+
+  return (
+    <div
+      className={`flex ${
+        isUser ? "justify-end" : "justify-start"
+      }`}
+    >
+      <div
+        className={`max-w-lg md:max-w-2xl rounded-lg px-4 py-2 ${
+          isUser
+            ? "bg-blue-600 text-white"
+            : "bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white"
+        }`}
+      >
+        <ReactMarkdown>{content}</ReactMarkdown>
+      </div>
+    </div>
+  );
+};
 
 const INITIAL_MODELS = [
   { name: "Flan-T5-Small", path: "Xenova/flan-t5-small" },
@@ -33,7 +58,8 @@ const INITIAL_MESSAGE = {
     "Hello! I'm a local AI assistant. You can choose a model from the dropdown and start chatting.",
 };
 
-const COMMANDS = ["/search", "/summarize", "/weather", "/wiki"];
+const COMMANDS = ["/search", "/summarize", "/weather", "/wiki", "/calculate"];
+
 
 export default function Home() {
   const [input, setInput] = useState("");
@@ -59,6 +85,8 @@ export default function Home() {
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [activeSuggestion, setActiveSuggestion] = useState(0);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [chatHistorySearch, setChatHistorySearch] = useState("");
 
   const worker = useRef<Worker | null>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
@@ -155,6 +183,7 @@ export default function Home() {
           break;
         case "complete":
           setStatus("Ready");
+          setIsGenerating(false);
           break;
         default:
           break;
@@ -229,6 +258,7 @@ export default function Home() {
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
     setInput("");
+    setIsGenerating(true);
 
     // Update chat history with the new user message
     setChatHistory((prev) =>
@@ -243,14 +273,40 @@ export default function Home() {
     const isWeather = input.startsWith("/weather ");
     const isWikiExplicit = input.startsWith("/wiki ");
     const isWikiImplicit = isWiki && !isWikiExplicit;
+    const isCalculate = input.startsWith("/calculate ");
 
     let workerMessages = newMessages.filter(msg => msg.role !== 'system');
+
+    if (isCalculate) {
+      const expression = input.substring("/calculate ".length).trim();
+      if (!expression) {
+        const errorMessage = { role: "assistant", content: "Please provide a mathematical expression to calculate." };
+        setMessages((prev) => [...prev, errorMessage]);
+        setIsGenerating(false);
+        return;
+      }
+
+      try {
+        const result = evaluate(expression);
+        const resultMessage = { role: "assistant", content: `The result is: ${result}` };
+        setMessages((prev) => [...prev, resultMessage]);
+      } catch (error) {
+        console.error("Calculation failed:", error);
+        const errorMessage = { role: "assistant", content: "Sorry, I couldn't calculate that. Please enter a valid mathematical expression." };
+        setMessages((prev) => [...prev, errorMessage]);
+      } finally {
+        setStatus("Ready");
+        setIsGenerating(false);
+      }
+      return;
+    }
 
     if (isSummarize) {
       const textToSummarize = input.substring("/summarize ".length).trim();
       if (!textToSummarize) {
         const errorMessage = { role: "assistant", content: "Please provide text to summarize." };
         setMessages((prev) => [...prev, errorMessage]);
+        setIsGenerating(false);
         return;
       }
 
@@ -273,6 +329,7 @@ export default function Home() {
         setMessages((prev) => [...prev, errorMessage]);
       } finally {
         setStatus("Ready");
+        setIsGenerating(false);
       }
       return; // Stop further processing
     }
@@ -282,6 +339,7 @@ export default function Home() {
       if (!location) {
         const errorMessage = { role: "assistant", content: "Please provide a location for the weather." };
         setMessages((prev) => [...prev, errorMessage]);
+        setIsGenerating(false);
         return;
       }
 
@@ -307,6 +365,7 @@ export default function Home() {
         setMessages((prev) => [...prev, errorMessage]);
       } finally {
         setStatus("Ready");
+        setIsGenerating(false);
       }
       return; // Stop further processing
     }
@@ -346,6 +405,7 @@ export default function Home() {
         console.error("Search failed:", error);
         const errorMessage = { role: "assistant", content: "Sorry, I couldn't perform the search." };
         setMessages((prev) => [...prev, errorMessage]);
+        setIsGenerating(false);
         return; // Stop further processing
       } finally {
         setIsSearching(false);
@@ -376,6 +436,7 @@ export default function Home() {
         console.error("Wikipedia RAG failed:", error);
         const errorMessage = { role: "assistant", content: "Sorry, I couldn't fetch information from Wikipedia." };
         setMessages((prev) => [...prev, errorMessage]);
+        setIsGenerating(false);
         return; // Stop further processing
       } finally {
         setIsSearching(false);
@@ -388,6 +449,18 @@ export default function Home() {
     if (worker.current) {
       setStatus("Generating...");
       worker.current.postMessage({ messages: [systemPrompt, ...workerMessages], model: selectedModel });
+    }
+  };
+
+  const stopGeneration = () => {
+    if (worker.current) {
+      worker.current.terminate();
+      worker.current = new Worker(new URL("./worker.js", import.meta.url), {
+        type: "module",
+      });
+      worker.current.postMessage({ model: selectedModel });
+      setStatus("Ready");
+      setIsGenerating(false);
     }
   };
 
@@ -505,6 +578,10 @@ export default function Home() {
     }
   };
 
+  const filteredChatHistory = chatHistory.filter(chat =>
+    chat.name.toLowerCase().includes(chatHistorySearch.toLowerCase())
+  );
+
   return (
     <div className="flex h-screen flex-col bg-zinc-50 font-sans dark:bg-black">
       <header className="flex flex-col md:flex-row items-center justify-between p-4 border-b dark:border-zinc-800 gap-4">
@@ -590,8 +667,15 @@ export default function Home() {
             <h2 className="text-lg font-semibold mb-4 text-black dark:text-zinc-50">
               Chat History
             </h2>
+            <input
+              type="text"
+              placeholder="Search history..."
+              className="w-full p-2 mb-4 border rounded-md bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white"
+              value={chatHistorySearch}
+              onChange={(e) => setChatHistorySearch(e.target.value)}
+            />
             <ul className="space-y-2">
-              {chatHistory
+              {filteredChatHistory
                 .sort((a, b) => b.timestamp - a.timestamp)
                 .map((chat) => (
                   <li key={chat.id} className="flex items-center justify-between group">
@@ -641,24 +725,9 @@ export default function Home() {
           className={`flex-1 overflow-y-auto p-4 space-y-4 transition-all duration-300 ease-in-out md:ml-0`}
         >
           {messages.filter(msg => msg.role !== 'system').map((msg, i) => (
-            <div
-              key={i}
-              className={`flex ${
-                msg.role === "user" ? "justify-end" : "justify-start"
-              }`}
-            >
-              <div
-                className={`max-w-lg md:max-w-2xl rounded-lg px-4 py-2 ${
-                  msg.role === "user"
-                    ? "bg-blue-600 text-white"
-                    : "bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white"
-                }`}
-              >
-                {msg.content}
-              </div>
-            </div>
+            <ChatMessage key={i} message={msg} />
           ))}
-          {status !== "Ready" && (
+          {isGenerating && (
             <div className="flex justify-start">
               <div className="max-w-lg rounded-lg px-4 py-2 bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white flex items-center">
                 <div className="dots-container mr-4">
@@ -713,26 +782,47 @@ export default function Home() {
             onKeyDown={handleKeyDown}
             disabled={status !== "Ready" || isSearching}
           />
-          <button
-            className="h-10 px-5 flex items-center justify-center bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 disabled:bg-gray-400"
-            onClick={sendMessage}
-            disabled={status !== "Ready" || isSearching}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+          {isGenerating ? (
+            <button
+              className="h-10 px-5 flex items-center justify-center bg-red-600 text-white font-medium transition-colors hover:bg-red-700"
+              onClick={stopGeneration}
             >
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          </button>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              className="h-10 px-5 flex items-center justify-center bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 disabled:bg-gray-400"
+              onClick={sendMessage}
+              disabled={status !== "Ready" || isSearching}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
+          )}
         </div>
       </footer>
 
@@ -946,3 +1036,4 @@ export default function Home() {
     </div>
   );
 }
+
