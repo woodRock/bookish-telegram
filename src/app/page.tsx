@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 
-const MODELS = [
+const INITIAL_MODELS = [
   { name: "Flan-T5-Small", path: "Xenova/flan-t5-small" },
   { name: "Flan-T5-Base", path: "Xenova/flan-t5-base" },
   { name: "LaMini-Flan-T5-783M", path: "Xenova/LaMini-Flan-T5-783M" },
@@ -19,7 +19,12 @@ const SYSTEM_PROMPT = {
 - If you don't know the answer or a question is beyond your capabilities, be honest and say so.
 - Do not make up information. Your knowledge is based on the model you are running.
 - Keep your answers concise and to the point, unless the user asks for more detail.
-- You can perform web searches if the user enables "Search Mode". Use the provided search results to answer the question.`
+- You can perform web searches if the user enables "Search Mode".
+
+**Available Tools:**
+- **/search <query>:** Searches the web for information.
+- **/summarize <text>:** Summarizes the provided text.
+- **/weather <location>:** Gets the current weather for a location.`
 };
 
 const INITIAL_MESSAGE = {
@@ -28,6 +33,8 @@ const INITIAL_MESSAGE = {
     "Hello! I'm a local AI assistant. You can choose a model from the dropdown and start chatting.",
 };
 
+const COMMANDS = ["/search", "/summarize", "/weather"];
+
 export default function Home() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<
@@ -35,7 +42,11 @@ export default function Home() {
   >([]);
   const [status, setStatus] = useState("Not loaded");
   const [progress, setProgress] = useState(0);
-  const [selectedModel, setSelectedModel] = useState(MODELS[0].path);
+  const [models, setModels] = useState(INITIAL_MODELS);
+  const [customModelPath, setCustomModelPath] = useState("");
+  const [selectedModel, setSelectedModel] = useState(INITIAL_MODELS[0].path);
+  const [isModelInfoModalOpen, setIsModelInfoModalOpen] = useState(false);
+  const [modelInfo, setModelInfo] = useState<any>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [isSearchMode, setIsSearchMode] = useState(false);
   const [isDeepThinkMode, setIsDeepThinkMode] = useState(false);
@@ -44,6 +55,8 @@ export default function Home() {
     { id: string; name: string; messages: { role: string; content: string }[]; timestamp: number }[]
   >([]);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [activeSuggestion, setActiveSuggestion] = useState(0);
 
   const worker = useRef<Worker | null>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
@@ -151,6 +164,58 @@ export default function Home() {
       worker.current?.removeEventListener("message", onMessageReceived);
   }, [selectedModel, currentChatId]);
 
+  useEffect(() => {
+    // Load custom models from localStorage on initial render
+    const storedModels = localStorage.getItem("customModels");
+    if (storedModels) {
+      setModels([...INITIAL_MODELS, ...JSON.parse(storedModels)]);
+    }
+  }, []);
+
+  const addCustomModel = () => {
+    if (!customModelPath.trim() || !customModelPath.includes('/')) {
+      alert("Please enter a valid Hugging Face model path (e.g., user/model-name).");
+      return;
+    }
+
+    const modelName = customModelPath.split('/')[1];
+    const newModel = { name: modelName, path: customModelPath };
+
+    if (models.find(m => m.path === newModel.path)) {
+      alert("Model already exists.");
+      return;
+    }
+
+    const newModels = [...models, newModel];
+    setModels(newModels);
+
+    // Persist to localStorage
+    const customModels = newModels.filter(m => !INITIAL_MODELS.some(initModel => initModel.path === m.path));
+    localStorage.setItem("customModels", JSON.stringify(customModels));
+
+    setCustomModelPath("");
+  };
+
+  const showModelInfo = async () => {
+    setStatus("Fetching model info...");
+    try {
+      // Fetch config.json
+      const configUrl = `https://huggingface.co/${selectedModel}/raw/main/config.json`;
+      const configRes = await fetch(configUrl);
+      if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${selectedModel}`);
+      const configData = await configRes.json();
+
+      setModelInfo(configData);
+      setIsModelInfoModalOpen(true);
+
+    } catch (error) {
+      console.error("Error fetching model info:", error);
+      alert("Could not fetch model information.");
+    } finally {
+      setStatus("Ready");
+    }
+  };
+
   const sendMessage = async () => {
     if (!input.trim() || !currentChatId) return;
 
@@ -168,6 +233,73 @@ export default function Home() {
 
     const isExplicitSearch = input.startsWith("/search ");
     const isImplicitSearch = isSearchMode && !isExplicitSearch;
+    const isSummarize = input.startsWith("/summarize ");
+    const isWeather = input.startsWith("/weather ");
+
+    if (isSummarize) {
+      const textToSummarize = input.substring("/summarize ".length).trim();
+      if (!textToSummarize) {
+        const errorMessage = { role: "assistant", content: "Please provide text to summarize." };
+        setMessages((prev) => [...prev, errorMessage]);
+        return;
+      }
+
+      setStatus("Summarizing...");
+      try {
+        const response = await fetch("/api/summarize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: textToSummarize }),
+        });
+
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+        const { summary } = await response.json();
+        const summaryMessage = { role: "assistant", content: `Summary:\n${summary}` };
+        setMessages((prev) => [...prev, summaryMessage]);
+      } catch (error) {
+        console.error("Summarization failed:", error);
+        const errorMessage = { role: "assistant", content: "Sorry, I couldn't summarize the text." };
+        setMessages((prev) => [...prev, errorMessage]);
+      } finally {
+        setStatus("Ready");
+      }
+      return; // Stop further processing
+    }
+
+    if (isWeather) {
+      const location = input.substring("/weather ".length).trim();
+      if (!location) {
+        const errorMessage = { role: "assistant", content: "Please provide a location for the weather." };
+        setMessages((prev) => [...prev, errorMessage]);
+        return;
+      }
+
+      setStatus("Fetching weather...");
+      try {
+        const response = await fetch("/api/weather", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ location }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        }
+
+        const { weatherReport } = await response.json();
+        const weatherMessage = { role: "assistant", content: weatherReport };
+        setMessages((prev) => [...prev, weatherMessage]);
+      } catch (error: any) {
+        console.error("Weather fetch failed:", error);
+        const errorMessage = { role: "assistant", content: `Sorry, I couldn't get the weather. ${error.message}` };
+        setMessages((prev) => [...prev, errorMessage]);
+      } finally {
+        setStatus("Ready");
+      }
+      return; // Stop further processing
+    }
 
     let workerMessages = newMessages.filter(msg => msg.role !== 'system');
     let systemPrompt = SYSTEM_PROMPT;
@@ -193,7 +325,7 @@ export default function Home() {
           .map((result: any, i: number) => `Result ${i + 1}:\nTitle: ${result.title}\nLink: ${result.link}\nSnippet: ${result.snippet}`)
           .join("\n\n");
 
-        let searchPromptContent = `You are an AI assistant. Your task is to answer the user's question based *only* on the provided search results and page content.\n\nUser's Question: "${query}"\n\nSearch Results:\n${formattedResults}`;
+        let searchPromptContent = `You are an AI assistant. Your task is to answer the user's question based *only* on the provided search results and page content.\n\nUser's Question: \"${query}\"\n\nSearch Results:\n${formattedResults}`;
         if (pageContent) {
           searchPromptContent += `\n\nContent from First Linked Page (${firstResultLink}):\n${pageContent}`;
         }
@@ -220,8 +352,36 @@ export default function Home() {
     }
   };
 
-  const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setSelectedModel(e.target.value);
+  const handleModelChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newModelPath = e.target.value;
+    setStatus("Validating model...");
+    try {
+      const configUrl = `https://huggingface.co/${newModelPath}/raw/main/config.json`;
+      const configRes = await fetch(configUrl);
+      if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${newModelPath}`);
+      const configData = await configRes.json();
+
+      // Check if the model is a text2text generation model.
+      // A simple heuristic: check for "ConditionalGeneration" in architectures.
+      const isText2Text = configData.architectures?.some((arch: string) => arch.endsWith("ForConditionalGeneration"));
+
+      if (!isText2Text) {
+        alert("This model is not a text-to-text generation model and is not compatible with the current pipeline. Please select a different model.");
+        // Revert the dropdown to the previous model
+        e.target.value = selectedModel;
+        setStatus("Ready");
+        return;
+      }
+
+      setSelectedModel(newModelPath);
+
+    } catch (error) {
+      console.error("Error validating model:", error);
+      alert("Could not validate the selected model. It might be incompatible.");
+      e.target.value = selectedModel;
+    } finally {
+      // setStatus will be updated by the worker's loading progress
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -265,6 +425,44 @@ export default function Home() {
     });
     if (currentChatId === id) {
       newChat(); // If the deleted chat was active, start a new one
+    }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setInput(value);
+
+    if (value.startsWith('/')) {
+      const query = value.substring(1).toLowerCase();
+      const filteredSuggestions = COMMANDS.filter(command =>
+        command.substring(1).toLowerCase().startsWith(query)
+      );
+      setSuggestions(filteredSuggestions);
+      setActiveSuggestion(0);
+    } else {
+      setSuggestions([]);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (suggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActiveSuggestion(prev => (prev + 1) % suggestions.length);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActiveSuggestion(prev => (prev - 1 + suggestions.length) % suggestions.length);
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        if (suggestions[activeSuggestion]) {
+          e.preventDefault();
+          setInput(suggestions[activeSuggestion] + ' ');
+          setSuggestions([]);
+        }
+      } else if (e.key === 'Escape') {
+        setSuggestions([]);
+      }
+    } else if (e.key === 'Enter') {
+      sendMessage();
     }
   };
 
@@ -324,12 +522,34 @@ export default function Home() {
             value={selectedModel}
             onChange={handleModelChange}
           >
-            {MODELS.map((model) => (
+            {models.map((model) => (
               <option key={model.path} value={model.path}>
                 {model.name}
               </option>
             ))}
           </select>
+          <button
+            className="h-10 px-3 rounded-md bg-gray-200 dark:bg-gray-700"
+            onClick={showModelInfo}
+            title="Show model information"
+          >
+            Info
+          </button>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              className="h-10 px-3 rounded-md bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white"
+              placeholder="HuggingFace model path"
+              value={customModelPath}
+              onChange={(e) => setCustomModelPath(e.target.value)}
+            />
+            <button
+              className="h-10 px-3 rounded-md bg-blue-600 text-white font-medium"
+              onClick={addCustomModel}
+            >
+              Add
+            </button>
+          </div>
           <div className="text-sm text-zinc-600 dark:text-zinc-400">
             Model: {status}
             {status === "Loading model..." && ` (${progress.toFixed(2)}%)`}
@@ -467,7 +687,29 @@ export default function Home() {
         </main>
       </div>
 
-      <footer className="p-4 border-t dark:border-zinc-800">
+      <footer className="p-4 border-t dark:border-zinc-800 relative">
+        {suggestions.length > 0 && (
+          <div className="absolute bottom-full left-0 right-0 bg-white dark:bg-zinc-700 border dark:border-zinc-600 rounded-md shadow-lg mb-2">
+            <ul>
+              {suggestions.map((suggestion, index) => (
+                <li
+                  key={suggestion}
+                  className={`p-2 cursor-pointer ${
+                    index === activeSuggestion
+                      ? 'bg-blue-500 text-white'
+                      : 'hover:bg-zinc-200 dark:hover:bg-zinc-600'
+                  }`}
+                  onClick={() => {
+                    setInput(suggestion + ' ');
+                    setSuggestions([]);
+                  }}
+                >
+                  {suggestion}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="flex items-center rounded-md overflow-hidden">
           <input
             type="text"
@@ -476,8 +718,8 @@ export default function Home() {
               isSearchMode ? "Type your search query..." : "Type your message..."
             }
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyPress={(e) => e.key === "Enter" && sendMessage()}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
             disabled={status !== "Ready" || isSearching}
           />
           <button
@@ -554,6 +796,27 @@ export default function Home() {
           </button>
         </div>
       </footer>
+
+      {isModelInfoModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-zinc-800 p-6 rounded-lg max-w-2xl w-full mx-4">
+            <h2 className="text-2xl font-bold mb-4 text-black dark:text-white">
+              Model Information: {selectedModel}
+            </h2>
+            <div className="max-h-96 overflow-y-auto bg-zinc-100 dark:bg-zinc-900 p-4 rounded-md">
+              <pre className="text-sm text-black dark:text-white">
+                {JSON.stringify(modelInfo, null, 2)}
+              </pre>
+            </div>
+            <button
+              className="mt-6 h-10 px-5 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
+              onClick={() => setIsModelInfoModalOpen(false)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
