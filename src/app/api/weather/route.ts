@@ -24,7 +24,14 @@ export async function POST(request: Request) {
       },
       signal: AbortSignal.timeout(20000) // 20 second timeout
     });
-    const geocodeData = await geocodeRes.json();
+    let geocodeData;
+    try {
+      geocodeData = await geocodeRes.json();
+    } catch (error) {
+      const text = await geocodeRes.text();
+      console.error("Failed to parse geocode JSON response:", text);
+      throw new Error("Failed to parse geocode JSON response");
+    }
 
     if (!geocodeData || geocodeData.length === 0) {
       return NextResponse.json({ error: `Could not find location: ${location}` }, { status: 404 });
@@ -40,7 +47,14 @@ export async function POST(request: Request) {
       },
       signal: AbortSignal.timeout(20000) // 20 second timeout
     });
-    const weatherData = await weatherRes.json();
+    let weatherData;
+    try {
+      weatherData = await weatherRes.json();
+    } catch (error) {
+      const text = await weatherRes.text();
+      console.error("Failed to parse weather JSON response:", text);
+      throw new Error("Failed to parse weather JSON response");
+    }
 
     if (!weatherData.current_weather) {
       return NextResponse.json({ error: "Could not fetch weather data." }, { status: 500 });
