@@ -678,7 +678,7 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 h-full overflow-hidden">
         {/* Sidebar */}
         <div
           className={`flex-shrink-0 bg-zinc-100 dark:bg-zinc-900 border-r dark:border-zinc-800 transition-all duration-300 ease-in-out ${
@@ -744,7 +744,7 @@ export default function Home() {
 
         {/* Main Chat Area */}
         <main
-          className={`flex-1 overflow-y-auto py-4 px-2 space-y-4 transition-all duration-300 ease-in-out md:ml-0 md:p-4 ${!isSidebarOpen ? 'w-full' : ''}`} // Ensure full width when sidebar is closed
+          className={`flex-1 h-full overflow-y-auto py-4 px-2 space-y-4 transition-all duration-300 ease-in-out md:ml-0 md:p-4 ${!isSidebarOpen ? 'w-full' : ''}`} // Ensure full width when sidebar is closed
         >
           {messages.filter(msg => msg.role !== 'system').map((msg, i) => (
             <ChatMessage key={i} message={msg} />
