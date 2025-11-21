@@ -4,8 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import { evaluate } from "mathjs";
 import { superheroPrompts } from "@/lib/superheroPrompts";
-import JSZip from "jszip";
-import { saveAs } from "file-saver";
+
 
 const ChatMessage = ({ message }: { message: { role: string; content: string } }) => {
   const { role, content } = message;
@@ -74,7 +73,7 @@ interface SearchResult {
 
 interface ModelConfig {
   architectures?: string[];
-  // Add other properties from config.json if needed
+  [key: string]: unknown; // Add index signature
 }
 
 export default function Home() {
@@ -85,7 +84,7 @@ export default function Home() {
   const [status, setStatus] = useState("Not loaded");
   const [progress, setProgress] = useState(0);
   const [models, setModels] = useState(INITIAL_MODELS);
-  const [customModelPath, setCustomModelPath] = useState("");
+  
   const [selectedModel, setSelectedModel] = useState(INITIAL_MODELS[0].path);
   const [isModelInfoModalOpen, setIsModelInfoModalOpen] = useState(false);
   const [modelInfo, setModelInfo] = useState<Record<string, unknown> | null>(null);
@@ -117,9 +116,6 @@ export default function Home() {
       setIsCharacterModalOpen(false);
     }
   };
-
-  console.log("superheroPrompts:", superheroPrompts);
-  console.log("Keys:", Object.keys(superheroPrompts));
 
   const worker = useRef<Worker | null>(null);
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
@@ -245,53 +241,33 @@ export default function Home() {
       worker.current?.removeEventListener("message", onMessageReceived);
   }, [selectedModel, currentChatId]);
 
-  useEffect(() => {
-    // Load custom models from localStorage on initial render
-    const storedModels = localStorage.getItem("customModels");
-    if (storedModels) {
-      setModels([...INITIAL_MODELS, ...JSON.parse(storedModels)]);
-    }
-  }, []);
+  
 
-  const addCustomModel = () => {
-    if (!customModelPath.trim() || !customModelPath.includes('/')) {
-      alert("Please enter a valid Hugging Face model path (e.g., user/model-name).");
-      return;
-    }
-
-    const modelName = customModelPath.split('/')[1];
-    const newModel = { name: modelName, path: customModelPath };
-
-    if (models.find(m => m.path === newModel.path)) {
-      alert("Model already exists.");
-      return;
-    }
-
-    const newModels = [...models, newModel];
-    setModels(newModels);
-
-    // Persist to localStorage
-    const customModels = newModels.filter(m => !INITIAL_MODELS.some(initModel => initModel.path === m.path));
-    localStorage.setItem("customModels", JSON.stringify(customModels));
-
-    setCustomModelPath("");
-  };
+  
 
   const showModelInfo = async () => {
     setStatus("Fetching model info...");
     try {
-      // Fetch config.json
-      const configUrl = `https://huggingface.co/${selectedModel}/raw/main/config.json`;
-      const configRes = await fetch(configUrl);
-      if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${selectedModel}`);
-      const configData = await configRes.json();
+      let configData: ModelConfig;
+      if (selectedModel.startsWith('local_models/')) {
+        const configUrl = `/api/local-model-file?modelPath=${selectedModel}&fileName=config.json`;
+        const configRes = await fetch(configUrl);
+        if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${selectedModel} from local server`);
+        configData = await configRes.json();
+      } else {
+        // Fetch config.json from Hugging Face
+        const configUrl = `https://huggingface.co/${selectedModel}/raw/main/config.json`;
+        const configRes = await fetch(configUrl);
+        if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${selectedModel}`);
+        configData = await configRes.json();
+      }
 
       setModelInfo(configData);
       setIsModelInfoModalOpen(true);
 
-    } catch (error) {
+    } catch (error: unknown) {
       console.error("Error fetching model info:", error);
-      alert("Could not fetch model information.");
+      alert(`Could not fetch model information. ${(error as Error).message}`);
     } finally {
       setStatus("Ready");
     }
@@ -503,59 +479,9 @@ export default function Home() {
     }
   };
 
-  const downloadModel = async () => {
-    setStatus("Preparing download...");
-    const zip = new JSZip();
-    const filesToAttempt = [
-      'config.json',
-      'model.safetensors',
-      'pytorch_model.bin',
-      'tf_model.h5',
-      'tokenizer.json',
-      'tokenizer_config.json',
-      'special_tokens_map.json',
-      'generation_config.json',
-    ];
-    let filesAdded = 0;
+  
 
-    try {
-      for (const fileName of filesToAttempt) {
-        const response = await fetch(`/api/get-model-file?modelPath=${selectedModel}&fileName=${fileName}`);
-        if (response.ok && response.body) {
-          const blob = await response.blob();
-          zip.file(fileName, blob);
-          filesAdded++;
-        } else {
-          console.warn(`Could not fetch ${fileName} for ${selectedModel}: ${response.statusText}`);
-        }
-      }
-
-      if (filesAdded === 0) {
-        alert("No model files found to download.");
-        setStatus("Ready");
-        return;
-      }
-
-      setStatus("Generating zip file...");
-      const content = await zip.generateAsync({ type: "blob" });
-      saveAs(content, `${selectedModel.replace('/', '-')}-weights.zip`);
-
-      setStatus("Ready");
-      alert("Model download initiated!");
-    } catch (error: unknown) {
-      console.error("Failed to download model:", error);
-      alert(`Failed to download model: ${(error as Error).message}. Please check the model path.`);
-      setStatus("Ready");
-    }
-  };
-
-  const deleteModel = (modelPath: string) => {
-    const newModels = models.filter(m => m.path !== modelPath);
-    setModels(newModels);
-
-    const customModels = newModels.filter(m => !INITIAL_MODELS.some(initModel => initModel.path === m.path));
-    localStorage.setItem("customModels", JSON.stringify(customModels));
-  };
+  
 
   const stopGeneration = () => {
     if (worker.current) {
@@ -574,10 +500,18 @@ export default function Home() {
     setSelectedModel(newModelPath);
     setStatus("Validating model...");
     try {
-      const configUrl = `https://huggingface.co/${newModelPath}/raw/main/config.json`;
-      const configRes = await fetch(configUrl);
-      if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${newModelPath}`);
-      const configData: ModelConfig = await configRes.json();
+      let configData: ModelConfig;
+      if (newModelPath.startsWith('local_models/')) {
+        const configUrl = `/api/local-model-file?modelPath=${newModelPath}&fileName=config.json`;
+        const configRes = await fetch(configUrl);
+        if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${newModelPath} from local server`);
+        configData = await configRes.json();
+      } else {
+        const configUrl = `https://huggingface.co/${newModelPath}/raw/main/config.json`;
+        const configRes = await fetch(configUrl);
+        if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${newModelPath}`);
+        configData = await configRes.json();
+      }
 
       // Check if the model is a text2text generation model.
       // A simple heuristic: check for "ConditionalGeneration" in architectures.
@@ -595,46 +529,7 @@ export default function Home() {
     }
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setStatus("Uploading model...");
-    const formData = new FormData();
-    formData.append("file", file);
-
-    try {
-      const response = await fetch("/api/upload-model", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-      }
-
-      const { modelPath } = await response.json();
-      const modelName = modelPath.split('/').pop(); // Extract model name from path
-      const newModel = { name: modelName, path: modelPath };
-
-      setModels((prevModels) => {
-        const updatedModels = [...prevModels, newModel];
-        // Persist to localStorage
-        const customModels = updatedModels.filter(m => !INITIAL_MODELS.some(initModel => initModel.path === m.path));
-        localStorage.setItem("customModels", JSON.stringify(customModels));
-        return updatedModels;
-      });
-      setSelectedModel(modelPath); // Select the newly uploaded model
-      alert("Model uploaded and extracted successfully!");
-    } catch (error: unknown) {
-      console.error("Error uploading model:", error);
-      alert(`Failed to upload model: ${(error as Error).message}`);
-    } finally {
-      setStatus("Ready");
-      e.target.value = ''; // Clear the file input
-    }
-  };
+  
 
   const loadChat = (id: string) => {
     console.log("Loading chat:", id);
@@ -994,31 +889,6 @@ export default function Home() {
                     </option>
                   ))}
                 </select>
-                <button
-                  className="h-10 px-3 rounded-md bg-red-600 text-white font-medium"
-                  onClick={() => deleteModel(selectedModel)}
-                  disabled={INITIAL_MODELS.some(m => m.path === selectedModel)}
-                >
-                  Delete
-                </button>
-              </div>
-              <div>
-                <label className="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Add Custom Model</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    className="h-10 px-3 w-full rounded-md bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white"
-                    placeholder="HuggingFace model path"
-                    value={customModelPath}
-                    onChange={(e) => setCustomModelPath(e.target.value)}
-                  />
-                  <button
-                    className="h-10 px-3 rounded-md bg-blue-600 text-white font-medium"
-                    onClick={addCustomModel}
-                  >
-                    Add
-                  </button>
-                </div>
               </div>
               <div className="flex items-center gap-4">
                 <button
@@ -1028,51 +898,6 @@ export default function Home() {
                 >
                   Info
                 </button>
-                <button
-                  className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
-                  onClick={downloadModel}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                  <span className="hidden sm:inline">Download Model</span>
-                </button>
-                <label className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 cursor-pointer">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="17 8 12 3 7 8" />
-                    <line x1="12" y1="3" x2="12" y2="15" />
-                  </svg>
-                  <span className="hidden sm:inline">Upload Model</span>
-                  <input
-                    type="file"
-                    className="hidden"
-                    onChange={handleFileChange}
-                    multiple
-                  />
-                </label>
               </div>
               <div className="flex items-center gap-4">
                 <button

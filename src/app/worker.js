@@ -1,7 +1,7 @@
-import { pipeline, env } from "@xenova/transformers";
+import { pipeline, env, AutoTokenizer, AutoModelForSeq2SeqLM, TokenizerModel } from "@xenova/transformers";
 
-// Skip local model check
-env.allowLocalModels = false;
+// Allow local models
+env.allowLocalModels = true;
 
 class PipelineSingleton {
   static task = "text2text-generation";
@@ -9,10 +9,9 @@ class PipelineSingleton {
 
   static async getInstance(model, progress_callback = null) {
     if (!this.instances.has(model)) {
-      this.instances.set(
-        model,
-        pipeline(this.task, model, { progress_callback })
-      );
+      let instance;
+      instance = await pipeline(this.task, model, { progress_callback });
+      this.instances.set(model, instance);
     }
     return this.instances.get(model);
   }
