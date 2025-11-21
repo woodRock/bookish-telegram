@@ -107,6 +107,7 @@ export default function Home() {
   const [topP, setTopP] = useState(0.5);
   const [systemPrompt, setSystemPrompt] = useState(SYSTEM_PROMPT.content);
   const [selectedSuperheroKey, setSelectedSuperheroKey] = useState<string | null>(null);
+  const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
 
   const handleCharacterSelect = (key: string) => {
     const character = superheroPrompts[key];
@@ -129,7 +130,7 @@ export default function Home() {
     if (currentChatId) {
       setChatHistory((prev) =>
         prev.map((chat) =>
-          chat.id === currentChatId ? { ...chat, messages: messages, timestamp: Date.now() } : chat
+          chat.id === currentChatId ? { ...chat, messages: messages } : chat
         ).sort((a, b) => b.timestamp - a.timestamp) // Ensure sorting after update
       );
     }
@@ -282,10 +283,10 @@ export default function Home() {
     setInput("");
     setIsGenerating(true);
 
-    // Update chat history with the new user message
+    // Update chat history with the new user message and timestamp
     setChatHistory((prev) =>
       prev.map((chat) =>
-        chat.id === currentChatId ? { ...chat, messages: newMessages } : chat
+        chat.id === currentChatId ? { ...chat, messages: newMessages, timestamp: Date.now() } : chat
       )
     );
 
@@ -541,15 +542,20 @@ export default function Home() {
   };
 
   const deleteChat = (id: string) => {
-    console.log("Deleting chat:", id);
-    setChatHistory((prev) => {
-      const updatedHistory = prev.filter((chat) => chat.id !== id);
-      console.log("Updated chat history after delete:", updatedHistory);
-      return updatedHistory;
-    });
-    if (currentChatId === id) {
-      newChat(); // If the deleted chat was active, start a new one
-    }
+    console.log("Initiating delete animation for chat:", id);
+    setDeletingChatId(id); // Mark chat for deletion animation
+
+    setTimeout(() => {
+      setChatHistory((prev) => {
+        const updatedHistory = prev.filter((chat) => chat.id !== id);
+        console.log("Updated chat history after delete:", updatedHistory);
+        return updatedHistory;
+      });
+      if (currentChatId === id) {
+        newChat(); // If the deleted chat was active, start a new one
+      }
+      setDeletingChatId(null); // Reset deletingChatId after actual removal
+    }, 300); // Match this duration with your CSS transition duration
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -700,7 +706,12 @@ export default function Home() {
               {filteredChatHistory
                 .sort((a, b) => b.timestamp - a.timestamp)
                 .map((chat) => (
-                  <li key={chat.id} className="flex items-center justify-between group">
+                  <li
+                    key={chat.id}
+                    className={`flex items-center justify-between group transition-all duration-300 ease-out overflow-hidden ${
+                      chat.id === deletingChatId ? "opacity-0 max-h-0 my-0" : "max-h-20 my-2" // max-h-20 is an arbitrary value, adjust as needed
+                    }`}
+                  >
                     <button
                       className={`flex-1 text-left p-2 rounded-l-md ${
                         chat.id === currentChatId
