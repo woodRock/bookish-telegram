@@ -9,12 +9,17 @@ import { superheroPrompts } from "@/lib/superheroPrompts";
 const ChatMessage = ({ message }: { message: { role: string; content: string } }) => {
   const { role, content } = message;
   const isUser = role === "user";
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    setIsVisible(true); // Trigger fade-in when component mounts
+  }, []);
 
   return (
     <div
-      className={`flex w-full ${ // Removed ml-4/mr-4 from here
-        isUser ? "justify-end" : "justify-start"
-      }`}
+      className={`flex w-full transition-opacity duration-500 ease-in ${
+        isVisible ? "opacity-100" : "opacity-0"
+      } ${isUser ? "justify-end" : "justify-start"}`}
     >
       <div
         className={`max-w-[75%] md:max-w-2xl rounded-lg px-4 py-2 ${
@@ -30,10 +35,10 @@ const ChatMessage = ({ message }: { message: { role: string; content: string } }
 };
 
 const INITIAL_MODELS = [
+  { name: "Flan-Alpaca-Large", path: "Xenova/flan-alpaca-large" },
   { name: "Flan-T5-Small", path: "Xenova/flan-t5-small" },
   { name: "Flan-T5-Base", path: "Xenova/flan-t5-base" },
   { name: "LaMini-Flan-T5-783M", path: "Xenova/LaMini-Flan-T5-783M" },
-  { name: "Flan-Alpaca-Large", path: "Xenova/flan-alpaca-large" },
   { name: "LaMini-T5-61M", path: "Xenova/LaMini-T5-61M" },
 ];
 
@@ -108,6 +113,10 @@ export default function Home() {
   const [systemPrompt, setSystemPrompt] = useState(SYSTEM_PROMPT.content);
   const [selectedSuperheroKey, setSelectedSuperheroKey] = useState<string | null>(null);
   const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
+  const [newChatId, setNewChatId] = useState<string | null>(null);
+  const [modelInfoModalOpacity, setModelInfoModalOpacity] = useState(0);
+  const [settingsModalOpacity, setSettingsModalOpacity] = useState(0);
+  const [characterModalOpacity, setCharacterModalOpacity] = useState(0);
 
   const handleCharacterSelect = (key: string) => {
     const character = superheroPrompts[key];
@@ -176,6 +185,7 @@ export default function Home() {
     setChatHistory((prev) => [newChatEntry, ...prev]); // Add new chat to top
     setCurrentChatId(newId);
     setMessages([{ role: "system", content: systemPrompt }, INITIAL_MESSAGE]);
+    setNewChatId(newId); // Set the ID of the new chat for fade-in animation
   }, [systemPrompt]);
 
   useEffect(() => {
@@ -187,6 +197,42 @@ export default function Home() {
       newChat(); // Create a new chat on initial load
     }
   }, [currentChatId, newChat]);
+
+  useEffect(() => {
+    if (newChatId) {
+      const timer = setTimeout(() => {
+        setNewChatId(null);
+      }, 500); // Duration of fade-in animation
+      return () => clearTimeout(timer);
+    }
+  }, [newChatId]);
+
+  useEffect(() => {
+    if (isModelInfoModalOpen) {
+      const timer = setTimeout(() => setModelInfoModalOpacity(1), 50);
+      return () => clearTimeout(timer);
+    } else {
+      setModelInfoModalOpacity(0);
+    }
+  }, [isModelInfoModalOpen]);
+
+  useEffect(() => {
+    if (isSettingsModalOpen) {
+      const timer = setTimeout(() => setSettingsModalOpacity(1), 50);
+      return () => clearTimeout(timer);
+    } else {
+      setSettingsModalOpacity(0);
+    }
+  }, [isSettingsModalOpen]);
+
+  useEffect(() => {
+    if (isCharacterModalOpen) {
+      const timer = setTimeout(() => setCharacterModalOpacity(1), 50);
+      return () => clearTimeout(timer);
+    } else {
+      setCharacterModalOpacity(0);
+    }
+  }, [isCharacterModalOpen]);
 
   useEffect(() => {
     if (!worker.current) {
@@ -708,9 +754,9 @@ export default function Home() {
                 .map((chat) => (
                   <li
                     key={chat.id}
-                    className={`flex items-center justify-between group transition-all duration-300 ease-out overflow-hidden ${
-                      chat.id === deletingChatId ? "opacity-0 max-h-0 my-0" : "max-h-20 my-2" // max-h-20 is an arbitrary value, adjust as needed
-                    }`}
+                    className={`flex items-center justify-between group transition-all duration-500 ease-out overflow-hidden
+                      ${chat.id === deletingChatId ? "opacity-0 max-h-0 my-0" : "max-h-20 my-2"}
+                      ${chat.id === newChatId ? "opacity-0" : ""}`}
                   >
                     <button
                       className={`flex-1 text-left p-2 rounded-l-md ${
@@ -802,7 +848,7 @@ export default function Home() {
         <div className="flex items-center rounded-md overflow-hidden">
           <input
             type="text"
-            className="flex-1 p-2 border-none bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white focus:outline-none"
+            className="flex-1 p-2 border-none bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             placeholder={
               isSearchMode
                 ? "Type your search query..."
@@ -860,7 +906,8 @@ export default function Home() {
       </footer>
 
       {isModelInfoModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 transition-opacity duration-300 ease-out"
+             style={{ opacity: modelInfoModalOpacity }}>
           <div className="bg-white dark:bg-zinc-800 p-6 rounded-lg max-w-2xl w-full mx-4">
             <h2 className="text-2xl font-bold mb-4 text-black dark:text-white">
               Model Information: {selectedModel}
@@ -881,7 +928,8 @@ export default function Home() {
       )}
 
       {isSettingsModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 transition-opacity duration-300 ease-out"
+             style={{ opacity: settingsModalOpacity }}>
           <div className="bg-white dark:bg-zinc-800 p-6 rounded-lg max-w-2xl w-full mx-4">
             <h2 className="text-2xl font-bold mb-4 text-black dark:text-white">
               Settings
@@ -1036,7 +1084,8 @@ export default function Home() {
       )}
 
       {isCharacterModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 transition-opacity duration-300 ease-out"
+             style={{ opacity: characterModalOpacity }}>
           <div className="bg-white dark:bg-zinc-800 p-6 rounded-lg max-w-4xl w-full mx-4">
             <h2 className="text-2xl font-bold mb-4 text-black dark:text-white">
               Select a Character
