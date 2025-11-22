@@ -680,6 +680,7 @@ export default function Home() {
         <div className="flex items-center gap-4 flex-wrap justify-center">
           <button
             className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
+            onClick={newChat}
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
