@@ -1,4 +1,4 @@
-import { pipeline, SummarizationPipeline, SummarizationSingle } from "@xenova/transformers";
+import { pipeline, SummarizationPipeline } from "@xenova/transformers";
 
 // Initialize the summarizer pipeline once
 let summarizer: SummarizationPipeline | null = null;
@@ -36,13 +36,16 @@ export async function summarizeSearchResults(
   }
 
   try {
-    const output: any = await summarizerInstance(textToSummarize, {
+    const output = await summarizerInstance(textToSummarize, {
       max_new_tokens: 100, // Summary length
       min_new_tokens: 20,
       do_sample: true,
       temperature: 0.7,
     });
-    return output[0].summary_text;
+    if (Array.isArray(output) && output.length > 0 && 'summary_text' in output[0]) {
+      return output[0].summary_text;
+    }
+    return "Could not generate a summary of the search results.";
   } catch (error) {
     console.error("Error during search results summarization:", error);
     return "Could not generate a summary of the search results.";

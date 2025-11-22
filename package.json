@@ -12,23 +12,16 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@xenova/transformers": "^2.17.2",
-    "adm-zip": "^0.5.16",
     "cheerio": "^1.1.2",
-    "file-saver": "^2.0.5",
-    "jszip": "^3.10.1",
     "mathjs": "^15.1.0",
     "next": "16.0.3",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-markdown": "^10.1.0",
-    "server-only": "^0.0.1",
-    "zip-a-folder": "^4.0.4"
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/adm-zip": "^0.5.7",
-    "@types/archiver": "^7.0.0",
-    "@types/file-saver": "^2.0.7",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

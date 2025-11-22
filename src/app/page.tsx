@@ -9,17 +9,12 @@ import { superheroPrompts } from "@/lib/superheroPrompts";
 const ChatMessage = ({ message }: { message: { role: string; content: string } }) => {
   const { role, content } = message;
   const isUser = role === "user";
-  const [isVisible, setIsVisible] = useState(false);
-
-  useEffect(() => {
-    setIsVisible(true); // Trigger fade-in when component mounts
-  }, []);
 
   return (
     <div
-      className={`flex w-full transition-opacity duration-500 ease-in ${
-        isVisible ? "opacity-100" : "opacity-0"
-      } ${isUser ? "justify-end" : "justify-start"}`}
+      className={`flex w-full transition-opacity duration-500 ease-in opacity-100 ${
+        isUser ? "justify-end" : "justify-start"
+      }`}
     >
       <div
         className={`max-w-[75%] md:max-w-2xl rounded-lg px-4 py-2 ${
@@ -88,7 +83,6 @@ export default function Home() {
   >([]);
   const [status, setStatus] = useState("Not loaded");
   const [progress, setProgress] = useState(0);
-  const [models, setModels] = useState(INITIAL_MODELS);
   
   const [selectedModel, setSelectedModel] = useState(INITIAL_MODELS[0].path);
   const [isModelInfoModalOpen, setIsModelInfoModalOpen] = useState(false);
@@ -186,7 +180,10 @@ export default function Home() {
     setCurrentChatId(newId);
     setMessages([{ role: "system", content: systemPrompt }, INITIAL_MESSAGE]);
     setNewChatId(newId); // Set the ID of the new chat for fade-in animation
-  }, [systemPrompt]);
+    if (worker.current) {
+      worker.current.postMessage({ model: selectedModel });
+    }
+  }, [systemPrompt, selectedModel]);
 
   useEffect(() => {
     const isMobile = window.innerWidth < 768;
@@ -281,12 +278,15 @@ export default function Home() {
 
     worker.current.addEventListener("message", onMessageReceived);
 
-    // Send a message to the worker to start loading the model
-    worker.current.postMessage({ model: selectedModel });
-
     return () =>
       worker.current?.removeEventListener("message", onMessageReceived);
-  }, [selectedModel, currentChatId]);
+  }, []);
+
+  useEffect(() => {
+    if (worker.current) {
+      worker.current.postMessage({ model: selectedModel });
+    }
+  }, [selectedModel]);
 
   
 
@@ -428,9 +428,9 @@ export default function Home() {
         const { weatherReport } = await response.json();
         const weatherMessage = { role: "assistant", content: weatherReport };
         setMessages((prev) => [...prev, weatherMessage]);
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error("Weather fetch failed:", error);
-        const errorMessage = { role: "assistant", content: `Sorry, I couldn't get the weather. ${error.message}` };
+        const errorMessage = { role: "assistant", content: `Sorry, I couldn't get the weather. ${(error as Error).message}` };
         setMessages((prev) => [...prev, errorMessage]);
       } finally {
         setStatus("Ready");
@@ -598,7 +598,8 @@ export default function Home() {
         return updatedHistory;
       });
       if (currentChatId === id) {
-        newChat(); // If the deleted chat was active, start a new one
+        setCurrentChatId(null);
+        setMessages([]);
       }
       setDeletingChatId(null); // Reset deletingChatId after actual removal
     }, 300); // Match this duration with your CSS transition duration
@@ -672,14 +673,13 @@ export default function Home() {
               <path d="M15 14l-3-3-3 3" />
             </svg>
           </button>
-          <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">
+          <h1 className="text-2xl font-semibold text-black dark:text-zinc-50" onClick={newChat}>
             Chat
           </h1>
         </div>
         <div className="flex items-center gap-4 flex-wrap justify-center">
           <button
             className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
-            onClick={newChat}
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -942,7 +942,7 @@ export default function Home() {
                   value={selectedModel}
                   onChange={handleModelChange}
                 >
-                  {models.map((model) => (
+                  {INITIAL_MODELS.map((model) => (
                     <option key={model.path} value={model.path}>
                       {model.name}
                     </option>

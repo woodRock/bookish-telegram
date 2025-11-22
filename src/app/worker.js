@@ -1,4 +1,4 @@
-import { pipeline, env, AutoTokenizer, AutoModelForSeq2SeqLM, TokenizerModel } from "@xenova/transformers";
+import { pipeline, env } from "@xenova/transformers";
 
 // Allow local models
 env.allowLocalModels = true;
