@@ -193,15 +193,19 @@ export default function Home() {
           setLoadingMessage(data.message);
           if (chatId) updateLastAssistant(chatId, (m) => ({ ...m, status: data.message }));
           break;
-        case "progress":
+        case "progress": {
+          // Whole-model progress (tokenizer + weights), aggregated in the worker.
+          const bytes = `${formatSize(Math.round(data.loaded / 1e6))} of ${formatSize(Math.round(data.total / 1e6))}`;
           setProgress(data.progress);
+          setLoadingMessage(`Downloading model… ${bytes}`);
           if (chatId) {
             updateLastAssistant(chatId, (m) => ({
               ...m,
-              status: `Downloading model… ${Math.round(data.progress)}%`,
+              status: `Downloading model… ${data.progress}% (${bytes})`,
             }));
           }
           break;
+        }
         case "ready":
           setModelStatus("ready");
           setLoadedModel(data.model);
