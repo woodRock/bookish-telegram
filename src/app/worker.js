@@ -26,6 +26,49 @@ async function detectBackend() {
   return { device: "wasm", dtype: "q4" };
 }
 
+/** Total size of the ONNX weight files for this dtype, from the Hub API (0 if unavailable). */
+async function expectedWeightBytes(id, dtype) {
+  try {
+    const res = await fetch(`https://huggingface.co/api/models/${id}/tree/main/onnx`);
+    if (!res.ok) return 0;
+    const prefix = `onnx/model_${dtype}.onnx`; // matches the graph and its _data chunks
+    const files = await res.json();
+    return files.filter((f) => f.path.startsWith(prefix)).reduce((sum, f) => sum + (f.size ?? 0), 0);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Aggregate byte progress over every file a load fetches (tokenizer and model).
+ * Transformers.js only learns about some files once they start downloading, so its own
+ * total can grow mid-load and the percentage jumps backwards. Flooring the total at the
+ * expected weight size and never reporting less than before keeps the bar steady, and
+ * posting only on whole-percent changes avoids flooding the page with re-renders.
+ */
+function createProgressTracker(id, expectedBytes) {
+  const files = new Map();
+  let best = 0;
+  let lastSent = -1;
+  return (info) => {
+    if (info.status !== "progress" || !info.total) return;
+    files.set(info.file, { loaded: info.loaded, total: info.total });
+    let loaded = 0;
+    let total = 0;
+    for (const f of files.values()) {
+      loaded += f.loaded;
+      total += f.total;
+    }
+    total = Math.max(total, expectedBytes);
+    // Hold at 99% until the model is actually ready.
+    best = Math.max(best, Math.min(99, (loaded / total) * 100));
+    const percent = Math.floor(best);
+    if (percent === lastSent) return;
+    lastSent = percent;
+    self.postMessage({ status: "progress", model: id, progress: percent, loaded, total });
+  };
+}
+
 async function load(id, avoidFp16 = false) {
   if (current?.id === id) {
     self.postMessage({ status: "ready", model: id, device: current.device, dtype: current.dtype });
@@ -42,19 +85,8 @@ async function load(id, avoidFp16 = false) {
   const device = backend.device;
   const dtype = avoidFp16 ? "q4" : backend.dtype;
 
-  const progress_callback = (info) => {
-    if (info.status === "progress_total") {
-      self.postMessage({
-        status: "progress",
-        model: id,
-        progress: info.progress,
-        loaded: info.loaded,
-        total: info.total,
-      });
-    }
-  };
-
   self.postMessage({ status: "loading", model: id, message: "Downloading weights..." });
+  const progress_callback = createProgressTracker(id, await expectedWeightBytes(id, dtype));
   const tokenizer = await AutoTokenizer.from_pretrained(id, { progress_callback });
   const model = await AutoModelForCausalLM.from_pretrained(id, {
     dtype,
