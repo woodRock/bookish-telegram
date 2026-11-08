@@ -1,38 +1,34 @@
-# bookish-telegram
+# Bookish
 
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+A private chat app that runs small language models entirely in your browser with [Transformers.js](https://huggingface.co/docs/transformers.js) v4. Models download once from Hugging Face, are cached by the browser, and run on WebGPU (or WASM on the CPU when WebGPU isn't available). Nothing you type leaves your device unless you use web or Wikipedia search.
 
-## Getting Started
+## Models
 
-First, run the development server:
+| Model | Download | Notes |
+|-------|----------|-------|
+| [LFM2.5 350M](https://huggingface.co/onnx-community/LFM2.5-350M-ONNX) | 255 MB | Default. Fast, good all-rounder |
+| [Gemma 3 270M](https://huggingface.co/onnx-community/gemma-3-270m-it-ONNX) | 323 MB | Smallest; simple prompts only |
+| [Qwen3.5 0.8B](https://huggingface.co/onnx-community/Qwen3.5-0.8B-Text-ONNX) | 470 MB | Reasoning mode |
+| [Qwen3 0.6B](https://huggingface.co/onnx-community/Qwen3-0.6B-ONNX) | 570 MB | Reasoning mode |
+| [Gemma 3 1B](https://huggingface.co/onnx-community/gemma-3-1b-it-ONNX) | 859 MB | Better writing quality |
+| [LFM3 1.7B](https://huggingface.co/onnx-community/LFM3-1.7B-ONNX) | 1.1 GB | Most capable; reasoning mode |
+
+On WebGPU with `shader-f16`, models use `q4f16` weights. Gemma models always use `q4` because their activations overflow in fp16 and produce garbled text. The list lives in [`src/lib/models.ts`](src/lib/models.ts).
+
+## Features
+
+- Streaming replies with tokens/sec, stop button, and copy
+- **Think** toggle for models with a reasoning mode; the trace is shown in a collapsible panel
+- **Web** and **Wiki** modes that ground answers in search results, with source links
+- Slash commands: `/search`, `/wiki`, `/summarize`, `/weather`, `/calculate`
+- Personas, adjustable sampling settings, and chat history saved in `localStorage`
+- Markdown, tables, and LaTeX maths rendering; light and dark themes; mobile layout
+
+## Development
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Open [http://localhost:3000](http://localhost:3000). Inference runs in a web worker ([`src/app/worker.js`](src/app/worker.js)); the API routes under `src/app/api` only proxy web search, Wikipedia and weather lookups.

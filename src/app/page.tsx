@@ -1,69 +1,73 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import ReactMarkdown from "react-markdown";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { evaluate } from "mathjs";
 import { superheroPrompts } from "@/lib/superheroPrompts";
+import { DEFAULT_MODEL, MODELS, formatSize, getModel } from "@/lib/models";
+import ChatMessage, { splitThinking, type Message, type Source } from "@/components/ChatMessage";
+import ModelPicker from "@/components/ModelPicker";
+import Modal from "@/components/Modal";
+import {
+  BookIcon,
+  BrainIcon,
+  ChevronDownIcon,
+  ChipIcon,
+  GlobeIcon,
+  LogoMark,
+  MenuIcon,
+  PlusIcon,
+  SearchIcon,
+  SendIcon,
+  SettingsIcon,
+  StopIcon,
+  TrashIcon,
+  UserIcon,
+} from "@/components/icons";
 
+const DEFAULT_SYSTEM_PROMPT = `You are a helpful and friendly AI assistant running locally in the user's browser. Give accurate, concise answers. If you don't know something, say so instead of making it up.`;
 
-const ChatMessage = ({ message }: { message: { role: string; content: string } }) => {
-  const { role, content } = message;
-  const isUser = role === "user";
-
-  return (
-    <div
-      className={`flex w-full transition-opacity duration-500 ease-in opacity-100 ${
-        isUser ? "justify-end" : "justify-start"
-      }`}
-    >
-      <div
-        className={`max-w-[75%] md:max-w-2xl rounded-lg px-4 py-2 ${
-          isUser
-            ? "bg-blue-600 text-white ml-4" // Added ml-4 here for user messages
-            : "bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white mr-4" // Added mr-4 here for system messages
-        }`}
-      >
-        <ReactMarkdown>{content}</ReactMarkdown>
-      </div>
-    </div>
-  );
-};
-
-const INITIAL_MODELS = [
-  { name: "Flan-Alpaca-Large", path: "Xenova/flan-alpaca-large" },
-  { name: "Flan-T5-Small", path: "Xenova/flan-t5-small" },
-  { name: "Flan-T5-Base", path: "Xenova/flan-t5-base" },
-  { name: "LaMini-Flan-T5-783M", path: "Xenova/LaMini-Flan-T5-783M" },
-  { name: "LaMini-T5-61M", path: "Xenova/LaMini-T5-61M" },
+const COMMANDS = [
+  { name: "/search", hint: "Search the web and answer from the results" },
+  { name: "/wiki", hint: "Answer from the top Wikipedia article" },
+  { name: "/summarize", hint: "Summarize a block of text" },
+  { name: "/weather", hint: "Current weather for a place" },
+  { name: "/calculate", hint: "Evaluate a maths expression" },
 ];
 
-const SYSTEM_PROMPT = {
-  role: "system",
-  content: `You are a helpful and friendly AI assistant, designed to run locally in the user's browser. Your goal is to provide accurate, concise, and relevant answers.
+const STARTERS = [
+  "Explain how a transformer language model works, simply",
+  "Write a haiku about running AI in a web browser",
+  "Give me three ideas for a weekend project",
+  "/calculate sqrt(2) * 10^3",
+];
 
-**Instructions:**
-- Be conversational and approachable.
-- If you don't know the answer or a question is beyond your capabilities, be honest and say so.
-- Do not make up information. Your knowledge is based on the model you are running.
-- Keep your answers concise and to the point, unless the user asks for more detail.
-- You can perform web searches if the user enables "Search Mode".
+const HISTORY_LIMIT = 8; // messages of context sent to the model
 
-**Available Tools:**
-- **/search <query>:** Searches the web for information.
-- **/summarize <text>:** Summarizes the provided text.
-- **/weather <location>:** Gets the current weather for a location.
-- **/wiki <query>:** Searches Wikipedia for information.
-- **/calculate <expression>:** Calculates a mathematical expression.`
+interface Chat {
+  id: string;
+  name: string;
+  messages: Message[];
+  timestamp: number;
+}
+
+interface Settings {
+  temperature: number;
+  topP: number;
+  maxTokens: number;
+  systemPrompt: string;
+  characterKey: string | null;
+}
+
+const DEFAULT_SETTINGS: Settings = {
+  temperature: 0.4,
+  topP: 0.9,
+  maxTokens: 1024,
+  systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  characterKey: null,
 };
 
-const INITIAL_MESSAGE = {
-  role: "assistant",
-  content:
-    "Hello! I'm a local AI assistant. You can choose a model from the dropdown and start chatting.",
-};
-
-const COMMANDS = ["/search", "/summarize", "/weather", "/wiki", "/calculate"];
-
+type Mode = "chat" | "web" | "wiki";
+type ModelStatus = "idle" | "loading" | "ready" | "error";
 
 interface SearchResult {
   title: string;
@@ -71,1063 +75,910 @@ interface SearchResult {
   snippet: string;
 }
 
-interface ModelConfig {
-  architectures?: string[];
-  [key: string]: unknown; // Add index signature
-}
+const load = <T,>(key: string, fallback: T): T => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const save = (key: string, value: unknown) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage can be full or blocked; persistence is best-effort.
+  }
+};
+
+const titleFrom = (text: string) => {
+  const clean = text.replace(/^\/\w+\s*/, "").replace(/\s+/g, " ").trim();
+  return clean.length > 42 ? clean.slice(0, 40).trimEnd() + "…" : clean || "New chat";
+};
+
+const newChatEntry = (): Chat => ({ id: crypto.randomUUID(), name: "New chat", messages: [], timestamp: Date.now() });
 
 export default function Home() {
-  const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<
-    { role: string; content: string }[]
-  >([]);
-  const [status, setStatus] = useState("Not loaded");
-  const [progress, setProgress] = useState(0);
-  
-  const [selectedModel, setSelectedModel] = useState(INITIAL_MODELS[0].path);
-  const [isModelInfoModalOpen, setIsModelInfoModalOpen] = useState(false);
-  const [modelInfo, setModelInfo] = useState<Record<string, unknown> | null>(null);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isSearchMode, setIsSearchMode] = useState(false);
-  const [isDeepThinkMode, setIsDeepThinkMode] = useState(false);
-  const [isWiki, setIsWiki] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [isCharacterModalOpen, setIsCharacterModalOpen] = useState(false);
-  const [chatHistory, setChatHistory] = useState<
-    { id: string; name: string; messages: { role: string; content: string }[]; timestamp: number }[]
-  >([]);
+  const [chats, setChats] = useState<Chat[]>([]);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [activeSuggestion, setActiveSuggestion] = useState(0);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [chatHistorySearch, setChatHistorySearch] = useState("");
-  const [temperature, setTemperature] = useState(0.5);
-  const [topP, setTopP] = useState(0.5);
-  const [systemPrompt, setSystemPrompt] = useState(SYSTEM_PROMPT.content);
-  const [selectedSuperheroKey, setSelectedSuperheroKey] = useState<string | null>(null);
-  const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
-  const [newChatId, setNewChatId] = useState<string | null>(null);
-  const [modelInfoModalOpacity, setModelInfoModalOpacity] = useState(0);
-  const [settingsModalOpacity, setSettingsModalOpacity] = useState(0);
-  const [characterModalOpacity, setCharacterModalOpacity] = useState(0);
+  const [hydrated, setHydrated] = useState(false);
 
-  const handleCharacterSelect = (key: string) => {
-    const character = superheroPrompts[key];
-    if (character) {
-      setSystemPrompt(character.prompt);
-      setSelectedSuperheroKey(key);
-      setIsCharacterModalOpen(false);
-    }
-  };
+  const [input, setInput] = useState("");
+  const [activeSuggestion, setActiveSuggestion] = useState(0);
+  const [mode, setMode] = useState<Mode>("chat");
+  const [thinking, setThinking] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+
+  const [modelId, setModelId] = useState(DEFAULT_MODEL);
+  const [loadedModel, setLoadedModel] = useState<string | null>(null);
+  const [modelStatus, setModelStatus] = useState<ModelStatus>("idle");
+  const [loadingMessage, setLoadingMessage] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [backend, setBackend] = useState<string | null>(null);
+
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
+  const [modal, setModal] = useState<"models" | "settings" | "characters" | null>(null);
 
   const worker = useRef<Worker | null>(null);
-  const chatContainerRef = useRef<HTMLDivElement | null>(null);
+  const generatingChatId = useRef<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const stickToBottom = useRef(true);
 
+  const model = getModel(modelId);
+  const currentChat = chats.find((c) => c.id === currentChatId) ?? null;
+  const messages = useMemo(() => currentChat?.messages ?? [], [currentChat]);
+  const character = settings.characterKey ? superheroPrompts[settings.characterKey] : null;
+
+  const suggestions = useMemo(() => {
+    if (!input.startsWith("/") || input.includes(" ")) return [];
+    const q = input.slice(1).toLowerCase();
+    return COMMANDS.filter((c) => c.name.slice(1).startsWith(q));
+  }, [input]);
+
+  // Restore persisted state after mount so server and client markup match.
   useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop =
-        chatContainerRef.current.scrollHeight;
-    }
-    // Update chat history whenever messages change for the current chat
-    if (currentChatId) {
-      setChatHistory((prev) =>
-        prev.map((chat) =>
-          chat.id === currentChatId ? { ...chat, messages: messages } : chat
-        ).sort((a, b) => b.timestamp - a.timestamp) // Ensure sorting after update
-      );
-    }
-  }, [messages, currentChatId]);
-
-  // Effect to summarize new chats
-  useEffect(() => {
-    if (currentChatId) {
-      const currentChat = chatHistory.find(chat => chat.id === currentChatId);
-      // Check if it's a new chat and has at least one user message
-      if (currentChat && currentChat.name === "New Chat" && currentChat.messages.length > 1) {
-        const firstUserMessage = currentChat.messages.find(msg => msg.role === "user")?.content;
-        if (firstUserMessage) {
-          fetch("/api/summarize-title", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt: firstUserMessage }),
-          })
-            .then(res => res.json())
-            .then(data => {
-              if (data.summary) {
-                setChatHistory(prev => prev.map(chat =>
-                  chat.id === currentChatId ? { ...chat, name: data.summary } : chat
-                ));
-              } else {
-                console.error("Failed to get summary:", data.error);
-              }
-            })
-            .catch(error => console.error("Error summarizing chat:", error));
-        }
-      }
-    }
-  }, [currentChatId, chatHistory]);
-
-  const newChat = useCallback(() => {
-    const newId = crypto.randomUUID();
-    const newChatEntry = {
-      id: newId,
-      name: "New Chat", // Temporary name, will be summarized by LLM
-      messages: [{ role: "system", content: systemPrompt }, INITIAL_MESSAGE],
-      timestamp: Date.now(),
-    };
-    setChatHistory((prev) => [newChatEntry, ...prev]); // Add new chat to top
-    setCurrentChatId(newId);
-    setMessages([{ role: "system", content: systemPrompt }, INITIAL_MESSAGE]);
-    setNewChatId(newId); // Set the ID of the new chat for fade-in animation
-    if (worker.current) {
-      worker.current.postMessage({ model: selectedModel });
-    }
-  }, [systemPrompt, selectedModel]);
-
-  useEffect(() => {
-    const isMobile = window.innerWidth < 768;
-    if (isMobile) {
-      setIsSidebarOpen(false);
-    }
-    if (!currentChatId) {
-      newChat(); // Create a new chat on initial load
-    }
-  }, [currentChatId, newChat]);
-
-  useEffect(() => {
-    if (newChatId) {
-      const timer = setTimeout(() => {
-        setNewChatId(null);
-      }, 500); // Duration of fade-in animation
-      return () => clearTimeout(timer);
-    }
-  }, [newChatId]);
-
-  useEffect(() => {
-    if (isModelInfoModalOpen) {
-      const timer = setTimeout(() => setModelInfoModalOpacity(1), 50);
-      return () => clearTimeout(timer);
-    } else {
-      setModelInfoModalOpacity(0);
-    }
-  }, [isModelInfoModalOpen]);
-
-  useEffect(() => {
-    if (isSettingsModalOpen) {
-      const timer = setTimeout(() => setSettingsModalOpacity(1), 50);
-      return () => clearTimeout(timer);
-    } else {
-      setSettingsModalOpacity(0);
-    }
-  }, [isSettingsModalOpen]);
-
-  useEffect(() => {
-    if (isCharacterModalOpen) {
-      const timer = setTimeout(() => setCharacterModalOpacity(1), 50);
-      return () => clearTimeout(timer);
-    } else {
-      setCharacterModalOpacity(0);
-    }
-  }, [isCharacterModalOpen]);
-
-  useEffect(() => {
-    if (!worker.current) {
-      worker.current = new Worker(new URL("./worker.js", import.meta.url), {
-        type: "module",
-      });
-    }
-
-    const onMessageReceived = async (e: MessageEvent) => {
-      switch (e.data.status) {
-        case "initiate":
-          setStatus("Loading model...");
-          setProgress(0);
-          break;
-        case "progress":
-          setStatus("Loading model...");
-          setProgress(e.data.progress);
-          break;
-        case "done":
-          setStatus("Model loaded");
-          setProgress(100);
-          break;
-        case "ready":
-          setStatus("Ready");
-          break;
-        case "update":
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.role === "assistant") {
-              return [
-                ...prev.slice(0, -1),
-                { ...last, content: last.content + e.data.output },
-              ];
-            }
-            return [...prev, { role: "assistant", content: e.data.output }];
-          });
-          break;
-        case "complete":
-          setStatus("Ready");
-          setIsGenerating(false);
-          break;
-        default:
-          break;
-      }
-    };
-
-    worker.current.addEventListener("message", onMessageReceived);
-
-    return () =>
-      worker.current?.removeEventListener("message", onMessageReceived);
+    const storedChats = load<Chat[]>("bookish.chats", []).map((c) => ({
+      ...c,
+      messages: c.messages.map((m) => ({ ...m, pending: false })),
+    }));
+    const fresh = newChatEntry();
+    setChats([fresh, ...storedChats.filter((c) => c.messages.length > 0)]);
+    setCurrentChatId(fresh.id);
+    setSettings({ ...DEFAULT_SETTINGS, ...load<Partial<Settings>>("bookish.settings", {}) });
+    const storedModel = load<string>("bookish.model", DEFAULT_MODEL);
+    setModelId(MODELS.some((m) => m.id === storedModel) ? storedModel : DEFAULT_MODEL);
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
-    if (worker.current) {
-      worker.current.postMessage({ model: selectedModel });
-    }
-  }, [selectedModel]);
+    if (hydrated && !isGenerating) save("bookish.chats", chats.filter((c) => c.messages.length > 0));
+  }, [chats, hydrated, isGenerating]);
+  useEffect(() => {
+    if (hydrated) save("bookish.settings", settings);
+  }, [settings, hydrated]);
+  useEffect(() => {
+    if (hydrated) save("bookish.model", modelId);
+  }, [modelId, hydrated]);
 
-  
+  const updateChat = useCallback((id: string, fn: (messages: Message[]) => Message[]) => {
+    setChats((prev) => prev.map((c) => (c.id === id ? { ...c, messages: fn(c.messages) } : c)));
+  }, []);
 
-  
+  const updateLastAssistant = useCallback(
+    (id: string, fn: (m: Message) => Message) => {
+      updateChat(id, (msgs) => {
+        const last = msgs[msgs.length - 1];
+        if (!last || last.role !== "assistant") return msgs;
+        return [...msgs.slice(0, -1), fn(last)];
+      });
+    },
+    [updateChat]
+  );
 
-  const showModelInfo = async () => {
-    setStatus("Fetching model info...");
-    try {
-      let configData: ModelConfig;
-      if (selectedModel.startsWith('local_models/')) {
-        const configUrl = `/api/local-model-file?modelPath=${selectedModel}&fileName=config.json`;
-        const configRes = await fetch(configUrl);
-        if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${selectedModel} from local server`);
-        configData = await configRes.json();
-      } else {
-        // Fetch config.json from Hugging Face
-        const configUrl = `https://huggingface.co/${selectedModel}/raw/main/config.json`;
-        const configRes = await fetch(configUrl);
-        if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${selectedModel}`);
-        configData = await configRes.json();
+  // Worker lifecycle
+  useEffect(() => {
+    const w = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+    worker.current = w;
+
+    const onMessage = (e: MessageEvent) => {
+      const data = e.data;
+      const chatId = generatingChatId.current;
+      switch (data.status) {
+        case "loading":
+          setModelStatus("loading");
+          setLoadingMessage(data.message);
+          if (chatId) updateLastAssistant(chatId, (m) => ({ ...m, status: data.message }));
+          break;
+        case "progress":
+          setProgress(data.progress);
+          if (chatId) {
+            updateLastAssistant(chatId, (m) => ({
+              ...m,
+              status: `Downloading model… ${Math.round(data.progress)}%`,
+            }));
+          }
+          break;
+        case "ready":
+          setModelStatus("ready");
+          setLoadedModel(data.model);
+          save("bookish.cached", [...new Set([...load<string[]>("bookish.cached", []), data.model])]);
+          setProgress(100);
+          setBackend(`${data.device === "webgpu" ? "WebGPU" : "WASM (CPU)"} · ${data.dtype}`);
+          break;
+        case "start":
+          if (chatId) updateLastAssistant(chatId, (m) => ({ ...m, status: "Thinking…" }));
+          break;
+        case "update":
+          if (chatId) {
+            updateLastAssistant(chatId, (m) => ({
+              ...m,
+              content: m.content + data.output,
+              tps: data.tps ?? m.tps,
+              numTokens: data.numTokens,
+            }));
+          }
+          break;
+        case "complete":
+          if (chatId) updateLastAssistant(chatId, (m) => ({ ...m, pending: false, status: undefined }));
+          generatingChatId.current = null;
+          setIsGenerating(false);
+          break;
+        case "error":
+          setModelStatus((s) => (s === "loading" ? "error" : s));
+          setLoadingMessage(data.message);
+          if (chatId) {
+            updateLastAssistant(chatId, (m) => ({
+              ...m,
+              pending: false,
+              error: true,
+              status: undefined,
+              content: m.content || `Something went wrong: ${data.message}`,
+            }));
+          }
+          generatingChatId.current = null;
+          setIsGenerating(false);
+          break;
       }
+    };
 
-      setModelInfo(configData);
-      setIsModelInfoModalOpen(true);
+    w.addEventListener("message", onMessage);
+    return () => {
+      w.removeEventListener("message", onMessage);
+      w.terminate();
+    };
+  }, [updateLastAssistant]);
 
-    } catch (error: unknown) {
-      console.error("Error fetching model info:", error);
-      alert(`Could not fetch model information. ${(error as Error).message}`);
-    } finally {
-      setStatus("Ready");
+  const loadModel = useCallback((id: string) => {
+    setModelId(id);
+    setProgress(0);
+    setModelStatus("loading");
+    setLoadingMessage("Starting…");
+    worker.current?.postMessage({ type: "load", data: { model: id, avoidFp16: getModel(id).avoidFp16 } });
+  }, []);
+
+  // Models that finished loading before are in the browser cache, so load them straight away.
+  useEffect(() => {
+    if (hydrated && modelStatus === "idle" && load<string[]>("bookish.cached", []).includes(modelId)) {
+      loadModel(modelId);
+    }
+    // Only on first hydration; later loads are user-initiated.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated]);
+
+  // Keep the view pinned to the newest message unless the user scrolled up.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+  }, [messages]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (el) stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+
+  // Auto-grow the composer.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, [input]);
+
+  const newChat = () => {
+    if (currentChat && currentChat.messages.length === 0) {
+      setIsSidebarOpen(false);
+      textareaRef.current?.focus();
+      return;
+    }
+    const entry = newChatEntry();
+    setChats((prev) => [entry, ...prev]);
+    setCurrentChatId(entry.id);
+    setIsSidebarOpen(false);
+    textareaRef.current?.focus();
+  };
+
+  const selectChat = (id: string) => {
+    // Drop empty chats left behind when switching away from them.
+    setChats((prev) => prev.filter((c) => c.messages.length > 0 || c.id === id));
+    setCurrentChatId(id);
+    setIsSidebarOpen(false);
+  };
+
+  const deleteChat = (id: string) => {
+    if (id === currentChatId) {
+      const entry = newChatEntry();
+      setChats((prev) => [entry, ...prev.filter((c) => c.id !== id)]);
+      setCurrentChatId(entry.id);
+    } else {
+      setChats((prev) => prev.filter((c) => c.id !== id));
     }
   };
 
-  const sendMessage = async () => {
-    if (!input.trim() || !currentChatId) return;
+  const reply = (chatId: string, content: string, extra: Partial<Message> = {}) =>
+    updateChat(chatId, (msgs) => [...msgs, { role: "assistant", content, ...extra }]);
 
-    const userMessage = { role: "user", content: input };
-    const newMessages = [...messages, userMessage];
-    setMessages(newMessages);
+  const sendMessage = async (raw = input) => {
+    const text = raw.trim();
+    if (!text || isGenerating || !currentChatId) return;
+
+    const chatId = currentChatId;
+    const history = messages;
     setInput("");
-    setIsGenerating(true);
+    stickToBottom.current = true;
 
-    // Update chat history with the new user message and timestamp
-    setChatHistory((prev) =>
-      prev.map((chat) =>
-        chat.id === currentChatId ? { ...chat, messages: newMessages, timestamp: Date.now() } : chat
+    setChats((prev) =>
+      prev.map((c) =>
+        c.id === chatId
+          ? {
+              ...c,
+              name: c.messages.length === 0 ? titleFrom(text) : c.name,
+              timestamp: Date.now(),
+              messages: [...c.messages, { role: "user", content: text }],
+            }
+          : c
       )
     );
 
-    const isExplicitSearch = input.startsWith("/search ");
-    const isImplicitSearch = isSearchMode && !isExplicitSearch;
-    const isSummarize = input.startsWith("/summarize ");
-    const isWeather = input.startsWith("/weather ");
-    const isWikiExplicit = input.startsWith("/wiki ");
-    const isWikiImplicit = isWiki && !isWikiExplicit;
-    const isCalculate = input.startsWith("/calculate ");
+    const [, command = "", rest = ""] = text.match(/^(\/\w+)\s*([\s\S]*)$/) ?? [];
+    const arg = rest.trim();
 
-    const workerMessages = newMessages.filter(msg => msg.role !== 'system');
-
-    if (isCalculate) {
-      const expression = input.substring("/calculate ".length).trim();
-      if (!expression) {
-        const errorMessage = { role: "assistant", content: "Please provide a mathematical expression to calculate." };
-        setMessages((prev) => [...prev, errorMessage]);
-        setIsGenerating(false);
-        return;
-      }
-
+    // Commands that don't need the language model
+    if (command === "/calculate") {
+      if (!arg) return reply(chatId, "Give me an expression, e.g. `/calculate 2^10 / 4`.", { error: true });
       try {
-        const result = evaluate(expression);
-        const resultMessage = { role: "assistant", content: `The result is: ${result}` };
-        setMessages((prev) => [...prev, resultMessage]);
+        return reply(chatId, `\`${arg}\` = **${evaluate(arg)}**`);
+      } catch {
+        return reply(chatId, "I couldn't evaluate that expression.", { error: true });
+      }
+    }
+
+    setIsGenerating(true);
+
+    if (command === "/weather") {
+      if (!arg) {
+        setIsGenerating(false);
+        return reply(chatId, "Tell me where, e.g. `/weather Wellington`.", { error: true });
+      }
+      reply(chatId, "", { pending: true, status: "Checking the weather…" });
+      try {
+        const res = await fetch("/api/weather", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ location: arg }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        updateLastAssistant(chatId, (m) => ({ ...m, content: data.weatherReport, pending: false, status: undefined }));
       } catch (error) {
-        console.error("Calculation failed:", error);
-        const errorMessage = { role: "assistant", content: "Sorry, I couldn't calculate that. Please enter a valid mathematical expression." };
-        setMessages((prev) => [...prev, errorMessage]);
+        updateLastAssistant(chatId, (m) => ({
+          ...m,
+          content: `I couldn't get the weather: ${(error as Error).message}`,
+          error: true,
+          pending: false,
+          status: undefined,
+        }));
       } finally {
-        setStatus("Ready");
         setIsGenerating(false);
       }
       return;
     }
 
-    if (isSummarize) {
-      const textToSummarize = input.substring("/summarize ".length).trim();
-      if (!textToSummarize) {
-        const errorMessage = { role: "assistant", content: "Please provide text to summarize." };
-        setMessages((prev) => [...prev, errorMessage]);
-        setIsGenerating(false);
-        return;
-      }
+    const useWeb = command === "/search" || (mode === "web" && !command);
+    const useWiki = command === "/wiki" || (mode === "wiki" && !command);
+    const query = command ? arg : text;
+    const enableThinking = thinking && model.thinking;
 
-      setStatus("Summarizing...");
-      try {
-        const response = await fetch("/api/summarize", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: textToSummarize }),
-        });
+    reply(chatId, "", {
+      pending: true,
+      thinking: enableThinking,
+      status: useWeb ? "Searching the web…" : useWiki ? "Reading Wikipedia…" : "Thinking…",
+    });
 
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    let prompt = query;
+    let sources: Source[] | undefined;
 
-        const { summary } = await response.json();
-        const summaryMessage = { role: "assistant", content: `Summary:\n${summary}` };
-        setMessages((prev) => [...prev, summaryMessage]);
-      } catch (error) {
-        console.error("Summarization failed:", error);
-        const errorMessage = { role: "assistant", content: "Sorry, I couldn't summarize the text." };
-        setMessages((prev) => [...prev, errorMessage]);
-      } finally {
-        setStatus("Ready");
-        setIsGenerating(false);
-      }
-      return; // Stop further processing
-    }
-
-    if (isWeather) {
-      const location = input.substring("/weather ".length).trim();
-      if (!location) {
-        const errorMessage = { role: "assistant", content: "Please provide a location for the weather." };
-        setMessages((prev) => [...prev, errorMessage]);
-        setIsGenerating(false);
-        return;
-      }
-
-      setStatus("Fetching weather...");
-      try {
-        const response = await fetch("/api/weather", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ location }),
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-        }
-
-        const { weatherReport } = await response.json();
-        const weatherMessage = { role: "assistant", content: weatherReport };
-        setMessages((prev) => [...prev, weatherMessage]);
-      } catch (error: unknown) {
-        console.error("Weather fetch failed:", error);
-        const errorMessage = { role: "assistant", content: `Sorry, I couldn't get the weather. ${(error as Error).message}` };
-        setMessages((prev) => [...prev, errorMessage]);
-      } finally {
-        setStatus("Ready");
-        setIsGenerating(false);
-      }
-      return; // Stop further processing
-    }
-
-    let systemPromptMessage = { role: "system", content: systemPrompt };
-
-    if (isExplicitSearch || isImplicitSearch) {
-      setIsSearching(true);
-      setStatus("Searching...");
-      const query = isExplicitSearch
-        ? input.substring("/search ".length).trim()
-        : input.trim();
-
-      try {
-        const response = await fetch("/api/search", {
+    try {
+      if (command === "/summarize") {
+        if (!arg) throw new Error("Paste some text after `/summarize`.");
+        prompt = `Summarize the following text in a few sentences:\n\n${arg}`;
+      } else if (useWeb) {
+        const res = await fetch("/api/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query }),
         });
-
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-        const { searchResults, pageContent, firstResultLink } = await response.json();
-        const formattedResults = searchResults
-          .map((result: SearchResult, i: number) => `Result ${i + 1}:\nTitle: ${result.title}\nLink: ${result.link}\nSnippet: ${result.snippet}`)
-          .join("\n\n");
-
-        let searchPromptContent = `You are an AI assistant. Your task is to answer the user's question based *only* on the provided search results and page content.\n\nUser's Question: \"${query}\"\n\nSearch Results:\n${formattedResults}`;
-        if (pageContent) {
-          searchPromptContent += `\n\nContent from First Linked Page (${firstResultLink}):\n${pageContent}`;
-        }
-        searchPromptContent += "\n\nAnswer the user's question based on the above information.";
-        
-        systemPromptMessage = { role: "system", content: searchPromptContent };
-
-      } catch (error: unknown) {
-        console.error("Search failed:", error);
-        const errorMessage = { role: "assistant", content: `Sorry, I couldn't perform the search. ${(error as Error).message}` };
-        setMessages((prev) => [...prev, errorMessage]);
-        setIsGenerating(false);
-        return; // Stop further processing
-      } finally {
-        setIsSearching(false);
-      }
-    } else if (isWikiExplicit || isWikiImplicit) {
-      setIsSearching(true); // Use the same searching state
-      setStatus("Searching Wikipedia...");
-      const query = isWikiExplicit
-        ? input.substring("/wiki ".length).trim()
-        : input.trim();
-
-      try {
-        const response = await fetch("/api/wikipedia-rag", {
+        if (!res.ok) throw new Error(`Web search failed (HTTP ${res.status}).`);
+        const { searchResults, pageContent, firstResultLink } = await res.json();
+        const results = (searchResults as SearchResult[]).slice(0, 5);
+        sources = results.map((r) => ({ title: r.title, link: r.link }));
+        const context = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}`).join("\n\n");
+        const page = pageContent ? `\n\nFrom ${firstResultLink}:\n${String(pageContent).slice(0, 2500)}` : "";
+        prompt = `Answer the question using these web search results. Cite sources like [1].\n\n${context}${page}\n\nQuestion: ${query}`;
+      } else if (useWiki) {
+        const res = await fetch("/api/wikipedia-rag", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query }),
         });
-
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-        const { content } = await response.json();
-        
-        const wikiPromptContent = `You are an AI assistant. Your task is to answer the user's question based *only* on the provided Wikipedia article content.\n\nUser's Question: \"${query}\"\n\nWikipedia Content:\n${content}\n\nAnswer the user's question based on the above information.`;
-        
-        systemPromptMessage = { role: "system", content: wikiPromptContent };
-
-      } catch (error: unknown) {
-        console.error("Wikipedia RAG failed:", error);
-        const errorMessage = { role: "assistant", content: `Sorry, I couldn't fetch information from Wikipedia. ${(error as Error).message}` };
-        setMessages((prev) => [...prev, errorMessage]);
-        setIsGenerating(false);
-        return; // Stop further processing
-      } finally {
-        setIsSearching(false);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Wikipedia lookup failed (HTTP ${res.status}).`);
+        sources = [{ title: `Wikipedia: ${data.title}`, link: data.link }];
+        prompt = `Answer the question using this Wikipedia article about "${data.title}".\n\n${data.content}\n\nQuestion: ${query}`;
       }
-    } else if (isDeepThinkMode) {
-      const deepThinkPrompt = `You are an AI assistant. Think step-by-step to answer the user's request. First, outline your thought process, then provide the final answer.\n\nThought Process:\n1. Analyze the user's request.\n2. Break down the request into smaller, manageable parts.\n3. Consider potential approaches and relevant information.\n4. Formulate a step-by-step plan to address the request.\n\nFinal Answer:`;
-      systemPromptMessage = { role: "system", content: deepThinkPrompt };
+    } catch (error) {
+      updateLastAssistant(chatId, (m) => ({
+        ...m,
+        content: (error as Error).message,
+        error: true,
+        pending: false,
+        status: undefined,
+      }));
+      setIsGenerating(false);
+      return;
     }
 
-    if (worker.current) {
-      setStatus("Generating...");
-      worker.current.postMessage({
-        messages: [systemPromptMessage, ...workerMessages],
-        model: selectedModel,
-        temperature,
-        topP,
-      });
+    if (sources) updateLastAssistant(chatId, (m) => ({ ...m, sources, status: "Thinking…" }));
+
+    // Earlier replies go back without their reasoning traces.
+    const context = history
+      .filter((m) => !m.error)
+      .map((m) => ({ role: m.role, content: m.role === "assistant" ? splitThinking(m.content, m.thinking).answer : m.content }))
+      .filter((m) => m.content)
+      // Some chat templates (e.g. Gemma) require strictly alternating user/assistant turns.
+      .reduce<{ role: Message["role"]; content: string }[]>((acc, m) => {
+        if (acc.length && acc[acc.length - 1].role === m.role) acc[acc.length - 1] = m;
+        else acc.push(m);
+        return acc;
+      }, [])
+      .slice(-HISTORY_LIMIT);
+    if (context[0]?.role === "assistant") context.shift();
+    if (context[context.length - 1]?.role === "user") context.pop();
+
+    if (modelStatus === "idle" || modelStatus === "error" || loadedModel !== modelId) {
+      if (modelStatus !== "loading") loadModel(modelId);
     }
+
+    generatingChatId.current = chatId;
+    worker.current?.postMessage({
+      type: "generate",
+      data: {
+        messages: [
+          { role: "system", content: settings.systemPrompt },
+          ...context,
+          { role: "user", content: prompt },
+        ],
+        temperature: settings.temperature,
+        top_p: settings.topP,
+        // Reasoning traces are long; give them room before the answer starts.
+        max_new_tokens: enableThinking ? Math.max(settings.maxTokens, 4096) : settings.maxTokens,
+        enable_thinking: enableThinking,
+      },
+    });
   };
-
-  
-
-  
 
   const stopGeneration = () => {
-    if (worker.current) {
-      worker.current.terminate();
-      worker.current = new Worker(new URL("./worker.js", import.meta.url), {
-        type: "module",
-      });
-      worker.current.postMessage({ model: selectedModel });
-      setStatus("Ready");
-      setIsGenerating(false);
-    }
+    worker.current?.postMessage({ type: "interrupt" });
   };
 
-  const handleModelChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newModelPath = e.target.value;
-    setSelectedModel(newModelPath);
-    setStatus("Validating model...");
-    try {
-      let configData: ModelConfig;
-      if (newModelPath.startsWith('local_models/')) {
-        const configUrl = `/api/local-model-file?modelPath=${newModelPath}&fileName=config.json`;
-        const configRes = await fetch(configUrl);
-        if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${newModelPath} from local server`);
-        configData = await configRes.json();
-      } else {
-        const configUrl = `https://huggingface.co/${newModelPath}/raw/main/config.json`;
-        const configRes = await fetch(configUrl);
-        if (!configRes.ok) throw new Error(`Failed to fetch config.json for ${newModelPath}`);
-        configData = await configRes.json();
-      }
-
-      // Check if the model is a text2text generation model.
-      // A simple heuristic: check for "ConditionalGeneration" in architectures.
-      const isText2Text = configData.architectures && (configData.architectures as string[]).some((arch: string) => arch.endsWith("ForConditionalGeneration"));
-
-      if (!isText2Text) {
-        alert("Warning: This model is not a text-to-text generation model and may not work as expected.");
-      }
-
-    } catch (error: unknown) {
-      console.error("Error validating model:", error);
-      alert(`Could not validate the selected model. It might be incompatible. ${(error as Error).message}`);
-    } finally {
-      // setStatus will be updated by the worker's loading progress
-    }
+  const applySuggestion = (name: string) => {
+    setInput(name + " ");
+    textareaRef.current?.focus();
   };
 
-  
-
-  const loadChat = (id: string) => {
-    console.log("Loading chat:", id);
-    const chat = chatHistory.find((c) => c.id === id);
-    if (chat) {
-      setCurrentChatId(id);
-      setMessages(chat.messages);
-    }
-  };
-
-  const deleteChat = (id: string) => {
-    console.log("Initiating delete animation for chat:", id);
-    setDeletingChatId(id); // Mark chat for deletion animation
-
-    setTimeout(() => {
-      setChatHistory((prev) => {
-        const updatedHistory = prev.filter((chat) => chat.id !== id);
-        console.log("Updated chat history after delete:", updatedHistory);
-        return updatedHistory;
-      });
-      if (currentChatId === id) {
-        setCurrentChatId(null);
-        setMessages([]);
-      }
-      setDeletingChatId(null); // Reset deletingChatId after actual removal
-    }, 300); // Match this duration with your CSS transition duration
-  };
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setInput(value);
-
-    if (value.startsWith('/')) {
-      const query = value.substring(1).toLowerCase();
-      const filteredSuggestions = COMMANDS.filter(command =>
-        command.substring(1).toLowerCase().startsWith(query)
-      );
-      setSuggestions(filteredSuggestions);
-      setActiveSuggestion(0);
-    } else {
-      setSuggestions([]);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (suggestions.length > 0) {
-      if (e.key === 'ArrowDown') {
+      if (e.key === "ArrowDown") {
         e.preventDefault();
-        setActiveSuggestion(prev => (prev + 1) % suggestions.length);
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setActiveSuggestion(prev => (prev - 1 + suggestions.length) % suggestions.length);
-      } else if (e.key === 'Enter' || e.key === 'Tab') {
-        if (suggestions[activeSuggestion]) {
-          e.preventDefault();
-          setInput(suggestions[activeSuggestion] + ' ');
-          setSuggestions([]);
-        }
-      } else if (e.key === 'Escape') {
-        setSuggestions([]);
+        setActiveSuggestion((i) => (i + 1) % suggestions.length);
+        return;
       }
-    } else if (e.key === 'Enter') {
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveSuggestion((i) => (i - 1 + suggestions.length) % suggestions.length);
+        return;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+        e.preventDefault();
+        applySuggestion(suggestions[Math.min(activeSuggestion, suggestions.length - 1)].name);
+        return;
+      }
+    }
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
       sendMessage();
     }
   };
 
-  const filteredChatHistory = chatHistory.filter(chat =>
-    chat.name.toLowerCase().includes(chatHistorySearch.toLowerCase())
+  const selectCharacter = (key: string | null) => {
+    setSettings((s) => ({
+      ...s,
+      characterKey: key,
+      systemPrompt: key ? superheroPrompts[key].prompt : DEFAULT_SYSTEM_PROMPT,
+    }));
+    setModal(null);
+  };
+
+  const filteredChats = chats
+    .filter((c) => c.messages.length > 0 || c.id === currentChatId)
+    .filter((c) => c.name.toLowerCase().includes(historySearch.toLowerCase()))
+    .sort((a, b) => b.timestamp - a.timestamp);
+
+  const statusDot =
+    modelStatus === "ready"
+      ? "bg-emerald-500"
+      : modelStatus === "loading"
+        ? "bg-amber-500 animate-pulse"
+        : modelStatus === "error"
+          ? "bg-red-500"
+          : "bg-zinc-400";
+
+  const modeButton = (value: Mode, label: string, icon: React.ReactNode) => (
+    <button
+      type="button"
+      onClick={() => setMode((m) => (m === value ? "chat" : value))}
+      aria-pressed={mode === value}
+      className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors ${
+        mode === value
+          ? "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-500/40 dark:bg-indigo-500/15 dark:text-indigo-300"
+          : "border-zinc-200 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
   );
 
   return (
-    <div className="flex h-screen flex-col bg-zinc-50 font-sans dark:bg-black">
-      <header className="flex flex-col md:flex-row items-center justify-between p-4 border-b dark:border-zinc-800 gap-4">
-        <div className="flex items-center gap-4">
-          <button
-            className="h-10 w-10 flex items-center justify-center rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 md:hidden"
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            title="Toggle Chat History"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M19 4v16H5V4h14zm-1 2H6v12h12V6z" />
-              <path d="M9 1h6" />
-              <path d="M12 17v-6" />
-              <path d="M15 14l-3-3-3 3" />
-            </svg>
-          </button>
-          <h1 className="text-2xl font-semibold text-black dark:text-zinc-50" onClick={newChat}>
-            Chat
-          </h1>
-        </div>
-        <div className="flex items-center gap-4 flex-wrap justify-center">
-          <button
-            className="h-10 px-5 flex items-center gap-2 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
-            onClick={newChat}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-            <span className="hidden sm:inline">New Chat</span>
-          </button>
-          <button
-            className="h-10 w-10 flex items-center justify-center rounded-md bg-gray-200 dark:bg-gray-700"
-            onClick={() => setIsCharacterModalOpen(true)}
-            title="Select Character"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-user-round">
-              <circle cx="12" cy="8" r="5" />
-              <path d="M20 21a8 8 0 0 0-16 0" />
-            </svg>
-          </button>
-          <button
-            className="h-10 w-10 flex items-center justify-center rounded-md bg-gray-200 dark:bg-gray-700"
-            onClick={() => setIsSettingsModalOpen(true)}
-            title="Settings"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-          </button>
-        </div>
-      </header>
-
-      <div className="flex flex-1 h-full overflow-hidden">
-        {/* Sidebar */}
-        <div
-          className={`flex-shrink-0 bg-zinc-100 dark:bg-zinc-900 border-r dark:border-zinc-800 transition-all duration-300 ease-in-out ${
-            isSidebarOpen ? "w-64 translate-x-0" : "w-0 -translate-x-full overflow-hidden"
-          } md:relative md:translate-x-0 md:w-64`} // Conditionally set width and overflow for mobile sidebar
-        >
-          <div className="p-4">
-            <h2 className="text-lg font-semibold mb-4 text-black dark:text-zinc-50">
-              Chat History
-            </h2>
-            <input
-              type="text"
-              placeholder="Search history..."
-              className="w-full p-2 mb-4 border rounded-md bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white"
-              value={chatHistorySearch}
-              onChange={(e) => setChatHistorySearch(e.target.value)}
-            />
-            <ul className="space-y-2">
-              {filteredChatHistory
-                .sort((a, b) => b.timestamp - a.timestamp)
-                .map((chat) => (
-                  <li
-                    key={chat.id}
-                    className={`flex items-center justify-between group transition-all duration-500 ease-out overflow-hidden
-                      ${chat.id === deletingChatId ? "opacity-0 max-h-0 my-0" : "max-h-20 my-2"}
-                      ${chat.id === newChatId ? "opacity-0" : ""}`}
-                  >
-                    <button
-                      className={`flex-1 text-left p-2 rounded-l-md ${
-                        chat.id === currentChatId
-                          ? "bg-blue-600 text-white"
-                          : "bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white hover:bg-zinc-300 dark:hover:bg-zinc-700"
-                      }`}
-                      onClick={() => loadChat(chat.id)}
-                    >
-                      {chat.name}
-                    </button>
-                    <button
-                      className="p-2 rounded-r-md bg-red-500 text-white transition-opacity"
-                      onClick={(e) => {
-                        e.stopPropagation(); // Prevent triggering loadChat
-                        deleteChat(chat.id);
-                      }}
-                      title="Delete Chat"
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M3 6h18" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        <line x1="10" y1="11" x2="10" y2="17" />
-                        <line x1="14" y1="11" x2="14" y2="17" />
-                      </svg>
-                    </button>
-                  </li>
-                ))}
-            </ul>
+    <div className="flex h-dvh bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+      {/* Sidebar */}
+      {isSidebarOpen && (
+        <div className="fixed inset-0 z-30 bg-zinc-950/40 md:hidden animate-fade-in" onClick={() => setIsSidebarOpen(false)} />
+      )}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-zinc-200 bg-zinc-50 duration-300 ease-out max-md:transition-transform dark:border-zinc-800 dark:bg-zinc-900 md:static md:translate-x-0 ${
+          isSidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <div className="flex items-center gap-2.5 px-4 pt-4 pb-3">
+          <LogoMark />
+          <div className="leading-tight">
+            <div className="font-semibold tracking-tight">Bookish</div>
+            <div className="text-xs text-zinc-500 dark:text-zinc-400">Private, in-browser AI</div>
           </div>
         </div>
 
-        {/* Main Chat Area */}
-        <main
-          className={`flex-1 h-full overflow-y-auto py-4 px-2 space-y-4 transition-all duration-300 ease-in-out md:ml-0 md:p-4 ${!isSidebarOpen ? 'w-full' : ''}`} // Ensure full width when sidebar is closed
-        >
-          {messages.filter(msg => msg.role !== 'system').map((msg, i) => (
-            <ChatMessage key={i} message={msg} />
-          ))}
-          {isGenerating && (
-            <div className="flex justify-start">
-              <div className="max-w-lg rounded-lg px-4 py-2 bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white flex items-center">
-                <div className="dots-container mr-4">
-                  <div className="dot-flashing"></div>
+        <div className="px-3">
+          <button
+            onClick={newChat}
+            className="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 text-sm font-medium text-white transition-colors hover:bg-zinc-700 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+          >
+            <PlusIcon size={16} /> New chat
+          </button>
+          <label className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 text-sm focus-within:border-indigo-400 dark:border-zinc-800 dark:bg-zinc-950">
+            <SearchIcon size={15} className="text-zinc-400" />
+            <input
+              type="text"
+              placeholder="Search chats"
+              className="w-full bg-transparent outline-none placeholder:text-zinc-400"
+              value={historySearch}
+              onChange={(e) => setHistorySearch(e.target.value)}
+            />
+          </label>
+        </div>
+
+        <nav className="mt-3 flex-1 overflow-y-auto px-2 pb-2">
+          <div className="px-2 pb-1 text-xs font-medium text-zinc-400">Recent</div>
+          <ul className="space-y-0.5">
+            {filteredChats.map((chat) => (
+              <li key={chat.id} className="group relative animate-fade-in">
+                <button
+                  onClick={() => selectChat(chat.id)}
+                  className={`w-full truncate rounded-lg py-2 pr-9 pl-3 text-left text-sm transition-colors ${
+                    chat.id === currentChatId
+                      ? "bg-zinc-200/80 font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-50"
+                      : "text-zinc-600 hover:bg-zinc-200/50 dark:text-zinc-400 dark:hover:bg-zinc-800/60"
+                  }`}
+                >
+                  {chat.name}
+                </button>
+                {chat.messages.length > 0 && (
+                  <button
+                    onClick={() => deleteChat(chat.id)}
+                    className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-md p-1.5 text-zinc-400 opacity-100 hover:bg-zinc-300/60 hover:text-red-600 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100 dark:hover:bg-zinc-700"
+                    aria-label={`Delete ${chat.name}`}
+                    title="Delete chat"
+                  >
+                    <TrashIcon size={14} />
+                  </button>
+                )}
+              </li>
+            ))}
+            {filteredChats.length === 0 && (
+              <li className="px-3 py-2 text-sm text-zinc-400">No chats match.</li>
+            )}
+          </ul>
+        </nav>
+
+        <div className="border-t border-zinc-200 p-3 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+          <div className="flex items-center gap-2">
+            <ChipIcon size={14} />
+            <span className="truncate">{backend ?? "Nothing leaves your device"}</span>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main column */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-zinc-200/70 px-3 dark:border-zinc-800/70">
+          <button
+            className="rounded-lg p-2 text-zinc-600 hover:bg-zinc-100 md:hidden dark:text-zinc-300 dark:hover:bg-zinc-800"
+            onClick={() => setIsSidebarOpen(true)}
+            aria-label="Open chat history"
+          >
+            <MenuIcon />
+          </button>
+
+          <button
+            onClick={() => setModal("models")}
+            className="flex h-9 min-w-0 items-center gap-2 rounded-lg px-2.5 text-sm font-medium hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          >
+            <span className={`h-2 w-2 shrink-0 rounded-full ${statusDot}`} />
+            <span className="truncate">{model.name}</span>
+            {modelStatus === "loading" && (
+              <span className="text-xs font-normal tabular-nums text-zinc-500">{Math.round(progress)}%</span>
+            )}
+            <ChevronDownIcon size={15} className="shrink-0 text-zinc-400" />
+          </button>
+
+          <div className="ml-auto flex items-center gap-1">
+            <button
+              onClick={() => setModal("characters")}
+              className="flex h-9 items-center gap-2 rounded-lg px-2.5 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              title="Choose a persona"
+            >
+              <UserIcon size={16} />
+              <span className="hidden max-w-[10rem] truncate sm:inline">{character?.name ?? "Assistant"}</span>
+            </button>
+            <button
+              onClick={() => setModal("settings")}
+              className="rounded-lg p-2 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              aria-label="Settings"
+              title="Settings"
+            >
+              <SettingsIcon />
+            </button>
+          </div>
+        </header>
+
+        {/* Messages */}
+        <main ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto">
+          {messages.length === 0 ? (
+            <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center px-4 py-10 text-center">
+              <LogoMark size={44} />
+              <h1 className="mt-5 text-2xl font-semibold tracking-tight sm:text-3xl">What can I help with?</h1>
+              <p className="mt-2 max-w-md text-sm text-zinc-500 dark:text-zinc-400">
+                Bookish runs small language models directly in your browser. Your conversations never leave this device.
+              </p>
+
+              <div className="mt-6 w-full max-w-md rounded-2xl border border-zinc-200 bg-zinc-50/60 p-4 text-left dark:border-zinc-800 dark:bg-zinc-900/60">
+                <div className="flex items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <span className={`h-2 w-2 rounded-full ${statusDot}`} />
+                      {model.name}
+                      <span className="font-normal text-zinc-400">· {formatSize(model.sizeMB)}</span>
+                    </div>
+                    <div className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">
+                      {modelStatus === "ready"
+                        ? `Ready on ${backend}`
+                        : modelStatus === "loading"
+                          ? loadingMessage
+                          : modelStatus === "error"
+                            ? `Failed to load: ${loadingMessage}`
+                            : "Not loaded yet. It downloads once, then it's cached."}
+                    </div>
+                  </div>
+                  {modelStatus !== "ready" && modelStatus !== "loading" && (
+                    <button
+                      onClick={() => loadModel(modelId)}
+                      className="h-8 shrink-0 rounded-lg bg-indigo-600 px-3 text-xs font-medium text-white hover:bg-indigo-500"
+                    >
+                      {modelStatus === "error" ? "Retry" : "Load model"}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setModal("models")}
+                    className="h-8 shrink-0 rounded-lg border border-zinc-200 px-3 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  >
+                    Change
+                  </button>
                 </div>
-                <div>
-                  {status}
-                  {status === "Loading model..." && ` (${progress.toFixed(2)}%)`}
-                </div>
+                {modelStatus === "loading" && (
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+                    <div
+                      className="h-full rounded-full bg-indigo-500 transition-[width] duration-300"
+                      style={{ width: `${Math.max(progress, 2)}%` }}
+                    />
+                  </div>
+                )}
               </div>
+
+              <div className="mt-6 grid w-full gap-2 sm:grid-cols-2">
+                {STARTERS.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => sendMessage(s)}
+                    disabled={isGenerating}
+                    className="rounded-xl border border-zinc-200 px-4 py-3 text-left text-sm text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 sm:px-6">
+              {messages.map((msg, i) => (
+                <ChatMessage key={i} message={msg} />
+              ))}
             </div>
           )}
         </main>
+
+        {/* Composer */}
+        <footer className="shrink-0 px-3 pb-3 sm:px-6 sm:pb-5">
+          <div className="relative mx-auto max-w-3xl">
+            {suggestions.length > 0 && (
+              <ul className="absolute right-0 bottom-full left-0 mb-2 overflow-hidden rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 animate-pop-in">
+                {suggestions.map((s, i) => (
+                  <li key={s.name}>
+                    <button
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        applySuggestion(s.name);
+                      }}
+                      onMouseEnter={() => setActiveSuggestion(i)}
+                      className={`flex w-full items-baseline gap-3 px-3 py-2 text-left text-sm ${
+                        i === activeSuggestion ? "bg-zinc-100 dark:bg-zinc-800" : ""
+                      }`}
+                    >
+                      <span className="font-mono font-medium text-indigo-600 dark:text-indigo-400">{s.name}</span>
+                      <span className="text-zinc-500 dark:text-zinc-400">{s.hint}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="rounded-2xl border border-zinc-200 bg-white shadow-sm transition-colors focus-within:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:focus-within:border-zinc-700">
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                className="block max-h-[200px] w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-[15px] outline-none placeholder:text-zinc-400"
+                placeholder={
+                  mode === "web"
+                    ? "Ask anything — I'll search the web first"
+                    : mode === "wiki"
+                      ? "Ask anything — I'll check Wikipedia first"
+                      : "Message Bookish, or type / for commands"
+                }
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  setActiveSuggestion(0);
+                }}
+                onKeyDown={handleKeyDown}
+              />
+              <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-2.5">
+                {modeButton("web", "Web", <GlobeIcon size={14} />)}
+                {modeButton("wiki", "Wiki", <BookIcon size={14} />)}
+                <button
+                  type="button"
+                  onClick={() => setThinking((t) => !t)}
+                  disabled={!model.thinking}
+                  aria-pressed={thinking && model.thinking}
+                  title={model.thinking ? "Let the model reason before answering" : `${model.name} doesn't support reasoning`}
+                  className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                    thinking && model.thinking
+                      ? "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/40 dark:bg-violet-500/15 dark:text-violet-300"
+                      : "border-zinc-200 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  <BrainIcon size={14} />
+                  Think
+                </button>
+
+                {isGenerating ? (
+                  <button
+                    onClick={stopGeneration}
+                    className="ml-auto flex h-9 w-9 items-center justify-center rounded-full bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+                    aria-label="Stop generating"
+                    title="Stop"
+                  >
+                    <StopIcon size={14} />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => sendMessage()}
+                    disabled={!input.trim()}
+                    className="ml-auto flex h-9 w-9 items-center justify-center rounded-full bg-indigo-600 text-white transition-colors hover:bg-indigo-500 disabled:bg-zinc-200 disabled:text-zinc-400 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-600"
+                    aria-label="Send message"
+                    title="Send"
+                  >
+                    <SendIcon size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
+            <p className="mt-2 text-center text-[11px] text-zinc-400">
+              Small models make mistakes. Check anything important.
+            </p>
+          </div>
+        </footer>
       </div>
 
-      <footer className="p-4 border-t dark:border-zinc-800 relative">
-        {suggestions.length > 0 && (
-          <div className="absolute bottom-full left-0 right-0 bg-white dark:bg-zinc-700 border dark:border-zinc-600 rounded-md shadow-lg mb-2">
-            <ul>
-              {suggestions.map((suggestion, index) => (
-                <li
-                  key={suggestion}
-                  className={`p-2 cursor-pointer ${
-                    index === activeSuggestion
-                      ? 'bg-blue-500 text-white'
-                      : 'hover:bg-zinc-200 dark:hover:bg-zinc-600'
-                  }`}
-                  onClick={() => {
-                    setInput(suggestion + ' ');
-                    setSuggestions([]);
-                  }}
-                >
-                  {suggestion}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        <div className="flex items-center rounded-md overflow-hidden">
-          <input
-            type="text"
-            className="flex-1 p-2 border-none bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            placeholder={
-              isSearchMode
-                ? "Type your search query..."
-                : isWiki
-                ? "Type your Wikipedia query..."
-                : "Type your message..."
-            }
-            value={input}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            disabled={status !== "Ready" || isSearching}
-          />
-          {isGenerating ? (
-            <button
-              className="h-10 px-5 flex items-center justify-center bg-red-600 text-white font-medium transition-colors hover:bg-red-700"
-              onClick={stopGeneration}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-              </svg>
-            </button>
-          ) : (
-            <button
-              className="h-10 px-5 flex items-center justify-center bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700 disabled:bg-gray-400"
-              onClick={sendMessage}
-              disabled={status !== "Ready" || isSearching}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <line x1="22" y1="2" x2="11" y2="13" />
-                <polygon points="22 2 15 22 11 13 2 9 22 2" />
-              </svg>
-            </button>
-          )}
-        </div>
-      </footer>
+      <ModelPicker
+        open={modal === "models"}
+        onClose={() => setModal(null)}
+        selected={modelId}
+        loadedModel={loadedModel}
+        backend={backend}
+        onSelect={(id) => {
+          if (id !== loadedModel || modelStatus === "error") loadModel(id);
+          setModal(null);
+        }}
+      />
 
-      {isModelInfoModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 transition-opacity duration-300 ease-out"
-             style={{ opacity: modelInfoModalOpacity }}>
-          <div className="bg-white dark:bg-zinc-800 p-6 rounded-lg max-w-2xl w-full mx-4">
-            <h2 className="text-2xl font-bold mb-4 text-black dark:text-white">
-              Model Information: {selectedModel}
-            </h2>
-            <div className="max-h-96 overflow-y-auto bg-zinc-100 dark:bg-zinc-900 p-4 rounded-md">
-              <pre className="text-sm text-black dark:text-white">
-                {JSON.stringify(modelInfo, null, 2)}
-              </pre>
-            </div>
+      <Modal
+        open={modal === "characters"}
+        onClose={() => setModal(null)}
+        title="Persona"
+        description="Changes the system prompt used for new replies."
+        wide
+      >
+        <div className="grid gap-2 sm:grid-cols-2">
+          {[
+            { key: null as string | null, name: "Assistant", prompt: DEFAULT_SYSTEM_PROMPT },
+            ...Object.entries(superheroPrompts).map(([key, c]) => ({ key: key as string | null, ...c })),
+          ].map((c) => (
             <button
-              className="mt-6 h-10 px-5 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
-              onClick={() => setIsModelInfoModalOpen(false)}
+              key={c.key ?? "default"}
+              onClick={() => selectCharacter(c.key)}
+              className={`rounded-xl border p-4 text-left transition-colors ${
+                settings.characterKey === c.key
+                  ? "border-indigo-500 bg-indigo-50/60 ring-1 ring-indigo-500 dark:bg-indigo-500/10"
+                  : "border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/50"
+              }`}
             >
-              Close
+              <div className="font-medium">{c.name}</div>
+              <p className="mt-1 line-clamp-3 text-sm text-zinc-500 dark:text-zinc-400">{c.prompt}</p>
             </button>
-          </div>
+          ))}
         </div>
-      )}
+      </Modal>
 
-      {isSettingsModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 transition-opacity duration-300 ease-out"
-             style={{ opacity: settingsModalOpacity }}>
-          <div className="bg-white dark:bg-zinc-800 p-6 rounded-lg max-w-2xl w-full mx-4">
-            <h2 className="text-2xl font-bold mb-4 text-black dark:text-white">
-              Settings
-            </h2>
-            <div className="space-y-4">
-              <div>
-                <label className="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Select Model</label>
-                <select
-                  className="h-10 px-3 w-full rounded-md bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white"
-                  value={selectedModel}
-                  onChange={handleModelChange}
-                >
-                  {INITIAL_MODELS.map((model) => (
-                    <option key={model.path} value={model.path}>
-                      {model.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex items-center gap-4">
-                <button
-                  className="h-10 px-3 rounded-md bg-gray-200 dark:bg-gray-700"
-                  onClick={showModelInfo}
-                  title="Show model information"
-                >
-                  Info
-                </button>
-              </div>
-              <div className="flex items-center gap-4">
-                <button
-                  className={`h-10 px-5 flex items-center justify-center ${
-                    isSearchMode ? "bg-green-600" : "bg-gray-400"
-                  } text-white font-medium transition-colors ${
-                    isSearchMode ? "hover:bg-green-700" : "hover:bg-gray-500"
-                  }`}
-                  onClick={() => setIsSearchMode(!isSearchMode)}
-                  disabled={status !== "Ready"}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <circle cx="11" cy="11" r="8" />
-                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                  </svg>
-                  <span className="hidden sm:inline">Search Mode</span>
-                </button>
-                <button
-                  className={`h-10 px-5 flex items-center justify-center ${
-                    isWiki ? "bg-blue-600" : "bg-gray-400"
-                  } text-white font-medium transition-colors ${
-                    isWiki ? "hover:bg-blue-700" : "hover:bg-gray-500"
-                  }`}
-                  onClick={() => setIsWiki(!isWiki)}
-                  disabled={status !== "Ready"}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M12 20h9" />
-                    <path d="M16.5 17.5L12 13 7.5 17.5" />
-                    <path d="M7.5 6.5L12 11 16.5 6.5" />
-                    <path d="M12 3v10" />
-                  </svg>
-                  <span className="hidden sm:inline">Wiki Mode</span>
-                </button>
-                <button
-                  className={`h-10 px-5 flex items-center justify-center ${
-                    isDeepThinkMode ? "bg-purple-600" : "bg-gray-400"
-                  } text-white font-medium transition-colors ${
-                    isDeepThinkMode ? "hover:bg-purple-700" : "hover:bg-gray-500"
-                  }`}
-                  onClick={() => setIsDeepThinkMode(!isDeepThinkMode)}
-                  disabled={status !== "Ready"}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M12 20h9" />
-                    <path d="M16.5 17.5L12 13 7.5 17.5" />
-                    <path d="M7.5 6.5L12 11 16.5 6.5" />
-                    <path d="M12 3v10" />
-                  </svg>
-                  <span className="hidden sm:inline">Deep Think</span>
-                </button>
-              </div>
-              <div>
-                <label className="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Temperature</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.1"
-                  value={temperature}
-                  onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                  className="w-full"
-                />
-              </div>
-              <div>
-                <label className="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Top P</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.1"
-                  value={topP}
-                  onChange={(e) => setTopP(parseFloat(e.target.value))}
-                  className="w-full"
-                />
-              </div>
-              <div>
-                <label className="block mb-2 text-sm font-medium text-gray-900 dark:text-white">System Prompt</label>
-                <textarea
-                  className="w-full p-2 border rounded-md bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white"
-                  value={systemPrompt}
-                  onChange={(e) => setSystemPrompt(e.target.value)}
-                  rows={5}
-                />
-              </div>
-            </div>
+      <Modal
+        open={modal === "settings"}
+        onClose={() => setModal(null)}
+        title="Settings"
+        footer={
+          <>
             <button
-              className="mt-6 h-10 px-5 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
-              onClick={() => setIsSettingsModalOpen(false)}
+              onClick={() => setSettings(DEFAULT_SETTINGS)}
+              className="h-9 rounded-lg px-3 text-sm text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
             >
-              Close
+              Reset to defaults
             </button>
-          </div>
-        </div>
-      )}
+            <button
+              onClick={() => setModal(null)}
+              className="h-9 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+            >
+              Done
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-5">
+          {(
+            [
+              ["Temperature", "temperature", 0, 1.5, 0.05, "Higher is more creative, lower is more focused."],
+              ["Top P", "topP", 0.1, 1, 0.05, "Limits sampling to the most likely tokens."],
+              ["Max reply length", "maxTokens", 128, 4096, 128, "Upper bound on tokens per reply."],
+            ] as const
+          ).map(([label, key, min, max, step, help]) => (
+            <div key={key}>
+              <div className="flex items-baseline justify-between">
+                <label htmlFor={key} className="text-sm font-medium">
+                  {label}
+                </label>
+                <span className="text-sm tabular-nums text-zinc-500">{settings[key]}</span>
+              </div>
+              <input
+                id={key}
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={settings[key]}
+                onChange={(e) => setSettings((s) => ({ ...s, [key]: parseFloat(e.target.value) }))}
+                className="mt-2 w-full accent-indigo-600"
+              />
+              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{help}</p>
+            </div>
+          ))}
 
-      {isCharacterModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 transition-opacity duration-300 ease-out"
-             style={{ opacity: characterModalOpacity }}>
-          <div className="bg-white dark:bg-zinc-800 p-6 rounded-lg max-w-4xl w-full mx-4">
-            <h2 className="text-2xl font-bold mb-4 text-black dark:text-white">
-              Select a Character
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-96 overflow-y-auto">
-              {Object.entries(superheroPrompts).map(([key, character]) => (
-                <div
-                  key={key}
-                  className={`p-4 border rounded-md ${
-                    selectedSuperheroKey === key
-                      ? "border-blue-500 ring-2 ring-blue-500"
-                      : "border-zinc-300 dark:border-zinc-700"
-                  } bg-zinc-100 dark:bg-zinc-900`}
-                >
-                  <h3 className="text-lg font-semibold mb-2 text-black dark:text-white">
-                    {character.name}
-                  </h3>
-                  <p className="text-sm text-zinc-700 dark:text-zinc-300 line-clamp-4">
-                    {character.prompt}
-                  </p>
-                  <button
-                    className="mt-4 w-full h-10 px-5 rounded-md bg-blue-600 text-white font-medium transition-colors hover:bg-blue-700"
-                    onClick={() => handleCharacterSelect(key)}
-                  >
-                    Select
-                  </button>
-                </div>
-              ))}
-            </div>
-            <button
-              className="mt-6 h-10 px-5 rounded-md bg-gray-400 text-white font-medium transition-colors hover:bg-gray-500"
-              onClick={() => setIsCharacterModalOpen(false)}
-            >
-              Close
-            </button>
+          <div>
+            <label htmlFor="system-prompt" className="text-sm font-medium">
+              System prompt
+            </label>
+            <textarea
+              id="system-prompt"
+              rows={5}
+              value={settings.systemPrompt}
+              onChange={(e) => setSettings((s) => ({ ...s, systemPrompt: e.target.value, characterKey: null }))}
+              className="mt-2 w-full rounded-lg border border-zinc-200 bg-white p-3 text-sm outline-none focus:border-indigo-400 dark:border-zinc-700 dark:bg-zinc-950"
+            />
           </div>
+
+          <div className="rounded-xl border border-zinc-200 p-4 text-sm dark:border-zinc-800">
+            <div className="font-medium">Model</div>
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-zinc-500 dark:text-zinc-400">
+              <dt>Name</dt>
+              <dd className="truncate text-zinc-800 dark:text-zinc-200">{model.name}</dd>
+              <dt>Repo</dt>
+              <dd className="truncate">
+                <a
+                  href={`https://huggingface.co/${model.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-indigo-600 hover:underline dark:text-indigo-400"
+                >
+                  {model.id}
+                </a>
+              </dd>
+              <dt>Backend</dt>
+              <dd className="text-zinc-800 dark:text-zinc-200">{backend ?? "Not loaded"}</dd>
+            </dl>
+          </div>
+
+          <button
+            onClick={() => {
+              const entry = newChatEntry();
+              setChats([entry]);
+              setCurrentChatId(entry.id);
+              setModal(null);
+            }}
+            disabled={isGenerating}
+            className="text-sm font-medium text-red-600 hover:underline disabled:opacity-50 dark:text-red-400"
+          >
+            Delete all chats
+          </button>
         </div>
-      )}
+      </Modal>
     </div>
   );
 }
-
-
-
