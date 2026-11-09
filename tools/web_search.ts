@@ -1,6 +1,21 @@
 import * as cheerio from "cheerio";
 
+// DuckDuckGo rate-limits repeated searches, so reuse recent results for the same query.
+const CACHE_MS = 10 * 60 * 1000;
+const cache = new Map<string, { at: number; value: Awaited<ReturnType<typeof search>> }>();
+
+export class RateLimitedError extends Error {}
+
 export async function web_search(query: string) {
+  const key = query.trim().toLowerCase();
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+  const value = await search(query);
+  if (value.searchResults.length > 0) cache.set(key, { at: Date.now(), value });
+  return value;
+}
+
+async function search(query: string) {
   const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   console.log(`Attempting to fetch search results from: ${searchUrl}`);
 
@@ -16,6 +31,11 @@ export async function web_search(query: string) {
     });
 
     console.log(`Search results response status for ${searchUrl}: ${searchResponse.status}`);
+
+    // DuckDuckGo answers 202 with a challenge page instead of results when it is rate-limiting.
+    if (searchResponse.status === 202) {
+      throw new RateLimitedError("DuckDuckGo is rate-limiting searches. Try again in a minute.");
+    }
 
     if (!searchResponse.ok) {
       const errorText = await searchResponse.text();
@@ -80,6 +100,7 @@ export async function web_search(query: string) {
     return { searchResults: results, pageContent, firstResultLink };
   } catch (error) {
     console.error("Error during web scraping:", error);
-    return { searchResults: [], pageContent: "", firstResultLink: "" };
+    if (error instanceof RateLimitedError) throw error;
+    return { searchResults: [] as { title: string; link: string; snippet: string }[], pageContent: "", firstResultLink: "" };
   }
 }

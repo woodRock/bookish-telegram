@@ -1,4 +1,4 @@
-import { web_search } from "../../../../tools/web_search";
+import { RateLimitedError, web_search } from "../../../../tools/web_search";
 import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
@@ -13,6 +13,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ searchResults, pageContent, firstResultLink });
   } catch (error) {
     console.error("Error during web search:", error);
+    if (error instanceof RateLimitedError) {
+      return NextResponse.json({ error: error.message }, { status: 429 });
+    }
     return NextResponse.json(
       { error: "Failed to perform web search" },
       { status: 500 }

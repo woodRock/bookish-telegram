@@ -48,6 +48,15 @@ export function splitThinking(content: string, thinkingEnabled = false) {
 const normalizeMath = (text: string) =>
   text.replace(/\\\[([\s\S]+?)\\\]/g, (_, m) => `$$${m}$$`).replace(/\\\(([\s\S]+?)\\\)/g, (_, m) => `$${m}$`);
 
+/** Turn [1]-style citations into links to the matching source. */
+const linkCitations = (text: string, sources?: Source[]) =>
+  sources?.length
+    ? text.replace(/\[(\d+)\](?!\()/g, (match, n) => {
+        const source = sources[Number(n) - 1];
+        return source ? `[[${n}]](${source.link})` : match;
+      })
+    : text;
+
 const Thought = ({ text, done }: { text: string; done: boolean }) => {
   const [open, setOpen] = useState(false);
   const expanded = open || !done;
@@ -135,7 +144,7 @@ function ChatMessage({ message }: { message: Message }) {
           } ${message.pending ? "streaming" : ""}`}
         >
           <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-            {normalizeMath(answer)}
+            {linkCitations(normalizeMath(answer), message.sources)}
           </ReactMarkdown>
         </div>
       )}

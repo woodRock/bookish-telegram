@@ -429,17 +429,19 @@ export default function Home() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query }),
         });
-        if (!res.ok) throw new Error(`Web search failed (HTTP ${res.status}).`);
-        const { searchResults, pageContent, firstResultLink } = await res.json();
-        const results = (searchResults as SearchResult[]).slice(0, 5);
+        const data = await res.json().catch(() => ({}));
+        const results = ((data.searchResults ?? []) as SearchResult[]).slice(0, 5);
         if (results.length > 0) {
           sources = results.map((r) => ({ title: r.title, link: r.link }));
           const context = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}`).join("\n\n");
-          const page = pageContent ? `\n\nFrom ${firstResultLink}:\n${String(pageContent).slice(0, 2500)}` : "";
+          const page = data.pageContent
+            ? `\n\nFrom ${data.firstResultLink}:\n${String(data.pageContent).slice(0, 2500)}`
+            : "";
           prompt = `Answer the question using these web search results. Cite sources like [1].\n\n${context}${page}\n\nQuestion: ${query}`;
         } else {
-          // An empty search would leave the model told to cite results it doesn't have.
-          updateLastAssistant(chatId, (m) => ({ ...m, status: "No web results, reading Wikipedia…" }));
+          // A failed or empty search would leave the model told to cite results it doesn't have.
+          const why = res.status === 429 ? "DuckDuckGo is rate-limiting" : "No web results";
+          updateLastAssistant(chatId, (m) => ({ ...m, status: `${why}, reading Wikipedia…` }));
           const wiki = await wikipediaPrompt(query).catch(() => null);
           if (wiki) ({ prompt, sources } = wiki);
         }
