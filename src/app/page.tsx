@@ -75,6 +75,20 @@ interface SearchResult {
   snippet: string;
 }
 
+async function wikipediaPrompt(query: string): Promise<{ prompt: string; sources: Source[] }> {
+  const res = await fetch("/api/wikipedia-rag", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Wikipedia lookup failed (HTTP ${res.status}).`);
+  return {
+    prompt: `Answer the question using this Wikipedia article about "${data.title}".\n\n${data.content}\n\nQuestion: ${query}`,
+    sources: [{ title: `Wikipedia: ${data.title}`, link: data.link }],
+  };
+}
+
 const load = <T,>(key: string, fallback: T): T => {
   try {
     const raw = localStorage.getItem(key);
@@ -418,20 +432,19 @@ export default function Home() {
         if (!res.ok) throw new Error(`Web search failed (HTTP ${res.status}).`);
         const { searchResults, pageContent, firstResultLink } = await res.json();
         const results = (searchResults as SearchResult[]).slice(0, 5);
-        sources = results.map((r) => ({ title: r.title, link: r.link }));
-        const context = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}`).join("\n\n");
-        const page = pageContent ? `\n\nFrom ${firstResultLink}:\n${String(pageContent).slice(0, 2500)}` : "";
-        prompt = `Answer the question using these web search results. Cite sources like [1].\n\n${context}${page}\n\nQuestion: ${query}`;
+        if (results.length > 0) {
+          sources = results.map((r) => ({ title: r.title, link: r.link }));
+          const context = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}`).join("\n\n");
+          const page = pageContent ? `\n\nFrom ${firstResultLink}:\n${String(pageContent).slice(0, 2500)}` : "";
+          prompt = `Answer the question using these web search results. Cite sources like [1].\n\n${context}${page}\n\nQuestion: ${query}`;
+        } else {
+          // An empty search would leave the model told to cite results it doesn't have.
+          updateLastAssistant(chatId, (m) => ({ ...m, status: "No web results, reading Wikipedia…" }));
+          const wiki = await wikipediaPrompt(query).catch(() => null);
+          if (wiki) ({ prompt, sources } = wiki);
+        }
       } else if (useWiki) {
-        const res = await fetch("/api/wikipedia-rag", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Wikipedia lookup failed (HTTP ${res.status}).`);
-        sources = [{ title: `Wikipedia: ${data.title}`, link: data.link }];
-        prompt = `Answer the question using this Wikipedia article about "${data.title}".\n\n${data.content}\n\nQuestion: ${query}`;
+        ({ prompt, sources } = await wikipediaPrompt(query));
       }
     } catch (error) {
       updateLastAssistant(chatId, (m) => ({
