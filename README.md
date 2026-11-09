@@ -31,4 +31,10 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Inference runs in a web worker ([`src/app/worker.js`](src/app/worker.js)); the API routes under `src/app/api` only proxy web search, Wikipedia and weather lookups.
+Open [http://localhost:3000](http://localhost:3000).
+
+Web mode searches with [Tavily](https://tavily.com) when a key is set (the free plan needs no card), and otherwise scrapes DuckDuckGo, which rate-limits quickly. If both fail, it answers from Wikipedia. To use Tavily, put your key in `.env.local`, which git ignores:
+
+```bash
+TAVILY_API_KEY=tvly-...
+``` Inference runs in a web worker ([`src/app/worker.js`](src/app/worker.js)); the API routes under `src/app/api` only proxy web search, Wikipedia and weather lookups.

@@ -48,6 +48,20 @@ export function splitThinking(content: string, thinkingEnabled = false) {
 const normalizeMath = (text: string) =>
   text.replace(/\\\[([\s\S]+?)\\\]/g, (_, m) => `$$${m}$$`).replace(/\\\(([\s\S]+?)\\\)/g, (_, m) => `$${m}$`);
 
+/** Turn [1]-style citations into links to the matching source. */
+const linkCitations = (text: string, sources?: Source[]) =>
+  sources?.length
+    ? text.replace(/\[(\d+)\](?!\()/g, (match, n) => {
+        const source = sources[Number(n) - 1];
+        return source ? `[[${n}]](${source.link})` : match;
+      })
+    : text;
+
+// Links in replies open in a new tab so following one doesn't leave the chat.
+const markdownComponents = {
+  a: (props: React.ComponentProps<"a">) => <a {...props} target="_blank" rel="noreferrer" />,
+};
+
 const Thought = ({ text, done }: { text: string; done: boolean }) => {
   const [open, setOpen] = useState(false);
   const expanded = open || !done;
@@ -134,8 +148,8 @@ function ChatMessage({ message }: { message: Message }) {
             message.error ? "text-red-600 dark:text-red-400" : "text-zinc-800 dark:text-zinc-200"
           } ${message.pending ? "streaming" : ""}`}
         >
-          <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-            {normalizeMath(answer)}
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={markdownComponents}>
+            {linkCitations(normalizeMath(answer), message.sources)}
           </ReactMarkdown>
         </div>
       )}
