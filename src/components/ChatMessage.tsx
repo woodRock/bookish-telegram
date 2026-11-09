@@ -57,6 +57,11 @@ const linkCitations = (text: string, sources?: Source[]) =>
       })
     : text;
 
+// Links in replies open in a new tab so following one doesn't leave the chat.
+const markdownComponents = {
+  a: (props: React.ComponentProps<"a">) => <a {...props} target="_blank" rel="noreferrer" />,
+};
+
 const Thought = ({ text, done }: { text: string; done: boolean }) => {
   const [open, setOpen] = useState(false);
   const expanded = open || !done;
@@ -143,7 +148,7 @@ function ChatMessage({ message }: { message: Message }) {
             message.error ? "text-red-600 dark:text-red-400" : "text-zinc-800 dark:text-zinc-200"
           } ${message.pending ? "streaming" : ""}`}
         >
-          <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={markdownComponents}>
             {linkCitations(normalizeMath(answer), message.sources)}
           </ReactMarkdown>
         </div>

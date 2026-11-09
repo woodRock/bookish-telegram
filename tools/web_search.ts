@@ -10,9 +10,28 @@ export async function web_search(query: string) {
   const key = query.trim().toLowerCase();
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
-  const value = await search(query);
+  const value = process.env.TAVILY_API_KEY
+    ? await tavilySearch(query, process.env.TAVILY_API_KEY).catch((error) => {
+        console.error("Tavily search failed, falling back to DuckDuckGo:", error);
+        return search(query);
+      })
+    : await search(query);
   if (value.searchResults.length > 0) cache.set(key, { at: Date.now(), value });
   return value;
+}
+
+/** Tavily's search API (https://docs.tavily.com), used when TAVILY_API_KEY is set. */
+async function tavilySearch(query: string, apiKey: string) {
+  const res = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ query, max_results: 5, search_depth: "basic" }),
+  });
+  if (!res.ok) throw new Error(`Tavily returned HTTP ${res.status}: ${await res.text()}`);
+  const data: { results?: { title: string; url: string; content: string }[] } = await res.json();
+  const searchResults = (data.results ?? []).map((r) => ({ title: r.title, link: r.url, snippet: r.content }));
+  // Tavily snippets are already extracts of the page, so there's no need to fetch the first result.
+  return { searchResults, pageContent: "", firstResultLink: searchResults[0]?.link ?? "" };
 }
 
 async function search(query: string) {
